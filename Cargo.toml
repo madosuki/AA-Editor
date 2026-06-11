@@ -2,7 +2,7 @@
 name = "aa_editor"
 version = "0.1.0"
 edition = "2024"
-license-file = "LICENSE.md"
+license-file = "LICENSE"
 
 [dependencies]
 gtk4 = "0.11"
