@@ -649,7 +649,7 @@ impl MainWindow {
 
     fn show_export_mlt_dialog(editor_list: &gtk::ListBox, window: &gtk::ApplicationWindow) {
         let dialog = FileChooserNative::new(
-            Some("MLTで出力"),
+            Some("MLT(UTF-8)で出力"),
             Some(window),
             FileChooserAction::Save,
             Some("Export"),
