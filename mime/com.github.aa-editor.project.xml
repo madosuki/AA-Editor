@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-aa-editor-project">
+    <comment>AA Editor project</comment>
+    <glob pattern="*.aa_editor_proj"/>
+  </mime-type>
+</mime-info>

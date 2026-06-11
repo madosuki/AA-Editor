@@ -568,7 +568,7 @@ impl MainWindow {
         if path.extension().is_some() {
             path
         } else {
-            path.with_extension("json")
+            path.with_extension("aa_editor_proj")
         }
     }
 
