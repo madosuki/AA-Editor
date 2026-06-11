@@ -26,5 +26,5 @@ mlt file output is only using UTF-8.
 
 ## project file
 .aa_editor_proj
-### format
+#### project file format
 json
