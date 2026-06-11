@@ -1,4 +1,5 @@
 mod main_window;
+mod project_file;
 
 use gtk::Application;
 use gtk::gio::prelude::{ApplicationExt, ApplicationExtManual};
