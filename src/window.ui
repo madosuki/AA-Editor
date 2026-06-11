@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <object class="GtkApplicationWindow" id="window">
+    <child>
+      <object class="GtkHeaderBar">
+        <property name="label" translatable="yes">Label</property>
+        <property name="single-line-mode">True</property>
+        <property name="elipsize">end</property>
+        <property name="width-chars">32</property>
+        <style>
+          <class name="title"/>
+        </style>
+      </object>
+    </child>
+  </object>
+</interface>

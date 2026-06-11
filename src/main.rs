@@ -1,3 +1,13 @@
-fn main() {
-    println!("Hello, world!");
+mod main_window;
+
+use gtk::Application;
+use gtk::gio::prelude::{ApplicationExt, ApplicationExtManual};
+use gtk4 as gtk;
+
+fn main() -> gtk::glib::ExitCode {
+    let app_id_str: &str = "com.aa_editor";
+    let app = Application::builder().application_id(app_id_str).build();
+
+    app.connect_activate(main_window::activate);
+    app.run()
 }
