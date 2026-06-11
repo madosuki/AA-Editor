@@ -897,13 +897,12 @@ impl MainWindow {
         self.view_window.set_vexpand(true);
         self.v_box.append(&self.view_window);
 
-        let action_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        action_box.set_halign(gtk::Align::End);
-        action_box.set_margin_top(8);
-        action_box.set_margin_end(8);
-        action_box.set_margin_bottom(8);
-
         let add_button = gtk::Button::with_label("Add");
+        add_button.set_halign(gtk::Align::End);
+        add_button.set_valign(gtk::Align::End);
+        add_button.set_margin_end(16);
+        add_button.set_margin_bottom(16);
+
         let editor_list = self.editor_list.clone();
         let window = self.window.clone();
         let state = self.state.clone();
@@ -912,15 +911,13 @@ impl MainWindow {
             MainWindow::mark_dirty(&window, &state);
         });
 
-        action_box.append(&add_button);
-        self.v_box.append(&action_box);
-
         self.loading_spinner.add_css_class("loading-spinner");
         self.loading_spinner.set_halign(gtk::Align::Center);
         self.loading_spinner.set_valign(gtk::Align::Center);
         Self::set_loading(&self.loading_spinner, false);
 
         self.overlay.set_child(Some(&self.v_box));
+        self.overlay.add_overlay(&add_button);
         self.overlay.add_overlay(&self.loading_spinner);
 
         Self::install_file_menu(
