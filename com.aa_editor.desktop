@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=AA Editor
+Comment=Japanese ASCII art editor
+Exec=aa_editor
+TryExec=aa_editor
+Terminal=false
+Categories=Utility;TextEditor;GTK;
+StartupNotify=true
