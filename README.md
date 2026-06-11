@@ -28,3 +28,14 @@ mlt file output is only using UTF-8.
 .aa_editor_proj
 #### project file format
 json
+```json
+{
+  "version": "0.0.1",
+  "mlt_collection_directory_path": "~/.local/share/aa_editor/mlt_collections",
+  "items": [
+    {
+      "text": "text"
+    }
+  ]
+}
+```

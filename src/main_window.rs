@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -9,11 +10,7 @@ use gtk4 as gtk;
 use gtk::gio;
 use gtk::gio::prelude::{ActionMapExt, ApplicationExt};
 use gtk::glib;
-use gtk::prelude::{
-    ApplicationWindowExt, BoxExt, ButtonExt, Cast, DialogExtManual, FileChooserExt, FileExt,
-    GtkApplicationExt, GtkWindowExt, ListBoxRowExt, NativeDialogExt, NativeDialogExtManual,
-    TextBufferExt, TextViewExt, WidgetExt,
-};
+use gtk::prelude::*;
 use gtk::{
     Application, ApplicationWindow, ButtonsType, CssProvider, FileChooserAction, FileChooserNative,
     MessageDialog, MessageType, ResponseType, STYLE_PROVIDER_PRIORITY_APPLICATION, gdk,
@@ -29,6 +26,7 @@ const APP_TITLE: &str = "AA Editor";
 #[derive(Debug, Default)]
 struct ProjectState {
     current_path: Option<PathBuf>,
+    project_file: ProjectFile,
     dirty: bool,
 }
 
@@ -45,6 +43,9 @@ struct MainWindow {
     v_box: gtk::Box,
     view_window: gtk::ScrolledWindow,
     editor_list: gtk::ListBox,
+    mlt_tree_store: gtk::TreeStore,
+    mlt_tree_view: gtk::TreeView,
+    mlt_viewer_list: gtk::ListBox,
     overlay: gtk::Overlay,
     loading_spinner: gtk::Spinner,
     state: Rc<RefCell<ProjectState>>,
@@ -64,6 +65,13 @@ impl MainWindow {
             v_box: gtk::Box::new(gtk::Orientation::Vertical, 1),
             view_window: gtk::ScrolledWindow::new(),
             editor_list: gtk::ListBox::new(),
+            mlt_tree_store: gtk::TreeStore::new(&[
+                String::static_type(),
+                String::static_type(),
+                bool::static_type(),
+            ]),
+            mlt_tree_view: gtk::TreeView::new(),
+            mlt_viewer_list: gtk::ListBox::new(),
             overlay: gtk::Overlay::new(),
             loading_spinner: gtk::Spinner::new(),
             state: Rc::new(RefCell::new(ProjectState::default())),
@@ -94,6 +102,10 @@ impl MainWindow {
             .loading-spinner {
                 min-width: 48px;
                 min-height: 48px;
+            }
+
+            .mlt-tree-path {
+                padding: 8px;
             }",
         );
 
@@ -187,6 +199,7 @@ impl MainWindow {
         text: &str,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
+        read_only: bool,
     ) -> gtk::ListBoxRow {
         let editor_row = gtk::ListBoxRow::new();
         editor_row.set_margin_top(6);
@@ -219,40 +232,46 @@ impl MainWindow {
         text_view.set_wrap_mode(gtk::WrapMode::None);
         text_view.set_accepts_tab(true);
         text_view.set_monospace(true);
+        text_view.set_editable(!read_only);
+        text_view.set_cursor_visible(!read_only);
         text_view.set_hexpand(true);
         text_view.set_vexpand(false);
         text_view.set_size_request(640, 480);
         text_view.buffer().set_text(text);
         Self::update_item_info_label(0, &text_view.buffer(), &item_info);
 
-        let window_for_change = window.clone();
-        let state_for_change = state.clone();
-        let item_info_for_change = item_info.clone();
-        text_view.buffer().connect_changed(move |buffer| {
-            let item_number = Self::item_number_from_info_label(&item_info_for_change);
-            Self::update_item_info_label(item_number, buffer, &item_info_for_change);
-            Self::mark_dirty(&window_for_change, &state_for_change);
-        });
-
-        let close_button = gtk::Button::with_label("Close");
-        close_button.set_valign(gtk::Align::Start);
-
-        let row_for_delete = editor_row.clone();
-        let window_for_delete = window.clone();
-        let state_for_delete = state.clone();
-        close_button.connect_clicked(move |_| {
-            MainWindow::confirm_remove_editor_row(
-                &row_for_delete,
-                &window_for_delete,
-                &state_for_delete,
-            );
-        });
+        if !read_only {
+            let window_for_change = window.clone();
+            let state_for_change = state.clone();
+            let item_info_for_change = item_info.clone();
+            text_view.buffer().connect_changed(move |buffer| {
+                let item_number = Self::item_number_from_info_label(&item_info_for_change);
+                Self::update_item_info_label(item_number, buffer, &item_info_for_change);
+                Self::mark_dirty(&window_for_change, &state_for_change);
+            });
+        }
 
         left_pane.append(&item_info);
 
         item_box.append(&left_pane);
         item_box.append(&text_view);
-        item_box.append(&close_button);
+
+        if !read_only {
+            let close_button = gtk::Button::with_label("Close");
+            close_button.set_valign(gtk::Align::Start);
+
+            let row_for_delete = editor_row.clone();
+            let window_for_delete = window.clone();
+            let state_for_delete = state.clone();
+            close_button.connect_clicked(move |_| {
+                MainWindow::confirm_remove_editor_row(
+                    &row_for_delete,
+                    &window_for_delete,
+                    &state_for_delete,
+                );
+            });
+            item_box.append(&close_button);
+        }
 
         editor_row.set_child(Some(&item_box));
         editor_row
@@ -264,8 +283,18 @@ impl MainWindow {
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
     ) {
-        editor_list.append(&Self::create_editor_row(text, window, state));
+        editor_list.append(&Self::create_editor_row(text, window, state, false));
         Self::renumber_editors(editor_list);
+    }
+
+    fn append_read_only_viewer_item(
+        viewer_list: &gtk::ListBox,
+        text: &str,
+        window: &gtk::ApplicationWindow,
+        state: &Rc<RefCell<ProjectState>>,
+    ) {
+        viewer_list.append(&Self::create_editor_row(text, window, state, true));
+        Self::renumber_editors(viewer_list);
     }
 
     fn clear_editors(editor_list: &gtk::ListBox) {
@@ -335,18 +364,20 @@ impl MainWindow {
         });
     }
 
-    fn load_project_texts_from_path(path: &Path) -> Result<Vec<String>> {
-        Ok(ProjectFile::read_from_path(path)?.to_texts())
+    fn load_project_from_path(path: &Path) -> Result<ProjectFile> {
+        ProjectFile::read_from_path(path)
     }
 
-    fn apply_project_texts(
+    fn apply_project_file(
         editor_list: &gtk::ListBox,
+        mlt_tree_store: &gtk::TreeStore,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
         path: PathBuf,
-        texts: Vec<String>,
+        project_file: ProjectFile,
     ) {
         Self::clear_editors(editor_list);
+        let texts = project_file.to_texts();
 
         if texts.is_empty() {
             Self::append_editor(editor_list, "", window, state);
@@ -356,6 +387,8 @@ impl MainWindow {
             }
         }
 
+        state.borrow_mut().project_file = project_file;
+        Self::refresh_mlt_collection_tree(mlt_tree_store, state);
         Self::mark_clean(window, state, Some(path));
     }
 
@@ -488,6 +521,7 @@ impl MainWindow {
     }
     fn load_project_from_path_async(
         editor_list: &gtk::ListBox,
+        mlt_tree_store: &gtk::TreeStore,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
         loading_controls: &LoadingControls,
@@ -496,6 +530,7 @@ impl MainWindow {
         Self::set_loading_state(loading_controls, true);
 
         let editor_list = editor_list.clone();
+        let mlt_tree_store = mlt_tree_store.clone();
         let window = window.clone();
         let state = state.clone();
         let loading_controls = loading_controls.clone();
@@ -504,19 +539,20 @@ impl MainWindow {
             let path_for_worker = path.clone();
 
             std::thread::spawn(move || {
-                let result = MainWindow::load_project_texts_from_path(&path_for_worker)
+                let result = MainWindow::load_project_from_path(&path_for_worker)
                     .map_err(|error| error.to_string());
                 let _ = sender.send(result);
             });
 
             glib::idle_add_local(move || match receiver.try_recv() {
-                Ok(Ok(texts)) => {
-                    MainWindow::apply_project_texts(
+                Ok(Ok(project_file)) => {
+                    MainWindow::apply_project_file(
                         &editor_list,
+                        &mlt_tree_store,
                         &window,
                         &state,
                         path.clone(),
-                        texts,
+                        project_file,
                     );
                     MainWindow::set_loading_state(&loading_controls, false);
                     glib::ControlFlow::Break
@@ -543,8 +579,10 @@ impl MainWindow {
         state: &Rc<RefCell<ProjectState>>,
         path: &Path,
     ) -> Result<()> {
-        let project_file = ProjectFile::from_texts(Self::collect_editor_texts(editor_list));
+        let mut project_file = state.borrow().project_file.clone();
+        project_file.set_texts(Self::collect_editor_texts(editor_list));
         project_file.write_to_path(path)?;
+        state.borrow_mut().project_file = project_file;
         Self::mark_clean(window, state, Some(path.to_path_buf()));
         Ok(())
     }
@@ -582,6 +620,7 @@ impl MainWindow {
 
     fn show_open_dialog(
         editor_list: &gtk::ListBox,
+        mlt_tree_store: &gtk::TreeStore,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
         loading_controls: &LoadingControls,
@@ -595,6 +634,7 @@ impl MainWindow {
         );
 
         let editor_list = editor_list.clone();
+        let mlt_tree_store = mlt_tree_store.clone();
         let window = window.clone();
         let state = state.clone();
         let loading_controls = loading_controls.clone();
@@ -603,6 +643,7 @@ impl MainWindow {
                 if let Some(path) = dialog.file().and_then(|file| file.path()) {
                     MainWindow::load_project_from_path_async(
                         &editor_list,
+                        &mlt_tree_store,
                         &window,
                         &state,
                         &loading_controls,
@@ -692,6 +733,172 @@ impl MainWindow {
         Ok(text.split("[SPLIT]").map(|text| text.to_string()).collect())
     }
 
+    fn apply_mlt_viewer_texts(
+        viewer_list: &gtk::ListBox,
+        window: &gtk::ApplicationWindow,
+        state: &Rc<RefCell<ProjectState>>,
+        texts: Vec<String>,
+    ) {
+        Self::clear_editors(viewer_list);
+
+        if texts.is_empty() {
+            Self::append_read_only_viewer_item(viewer_list, "", window, state);
+        } else {
+            for text in texts {
+                Self::append_read_only_viewer_item(viewer_list, &text, window, state);
+            }
+        }
+    }
+
+    fn load_mlt_viewer_from_path(
+        viewer_list: &gtk::ListBox,
+        window: &gtk::ApplicationWindow,
+        state: &Rc<RefCell<ProjectState>>,
+        path: PathBuf,
+    ) {
+        match Self::load_mlt_texts_from_path(&path) {
+            Ok(texts) => Self::apply_mlt_viewer_texts(viewer_list, window, state, texts),
+            Err(error) => Self::show_error_dialog(window, &error.to_string()),
+        }
+    }
+
+    fn resolve_project_path(path: &str) -> PathBuf {
+        if path == "~" {
+            if let Some(home) = env::var_os("HOME") {
+                return PathBuf::from(home);
+            }
+        }
+
+        if let Some(rest) = path.strip_prefix("~/") {
+            if let Some(home) = env::var_os("HOME") {
+                return PathBuf::from(home).join(rest);
+            }
+        }
+
+        PathBuf::from(path)
+    }
+
+    fn mlt_collection_directory_path(state: &Rc<RefCell<ProjectState>>) -> PathBuf {
+        Self::resolve_project_path(&state.borrow().project_file.mlt_collection_directory_path)
+    }
+
+    fn is_mlt_file(path: &Path) -> bool {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("mlt"))
+    }
+
+    fn append_mlt_tree_path(
+        store: &gtk::TreeStore,
+        parent: Option<&gtk::TreeIter>,
+        path: &Path,
+    ) -> Result<()> {
+        let display_name = path
+            .file_name()
+            .and_then(|file_name| file_name.to_str())
+            .map(|file_name| file_name.to_string())
+            .unwrap_or_else(|| path.display().to_string());
+        let is_file = path.is_file();
+        let full_path = if is_file {
+            path.display().to_string()
+        } else {
+            String::new()
+        };
+
+        let iter = store.insert_with_values(
+            parent,
+            None,
+            &[(0, &display_name), (1, &full_path), (2, &is_file)],
+        );
+
+        if !path.is_dir() {
+            return Ok(());
+        }
+
+        let mut entries = fs::read_dir(path)
+            .with_context(|| format!("failed to read directory: {}", path.display()))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| format!("failed to read directory entry: {}", path.display()))?;
+
+        entries.retain(|entry| {
+            let path = entry.path();
+            path.is_dir() || Self::is_mlt_file(&path)
+        });
+        entries.sort_by_key(|entry| {
+            let path = entry.path();
+            (
+                path.is_file(),
+                entry.file_name().to_string_lossy().to_lowercase(),
+            )
+        });
+
+        for entry in entries {
+            Self::append_mlt_tree_path(store, Some(&iter), &entry.path())?;
+        }
+
+        Ok(())
+    }
+
+    fn refresh_mlt_collection_tree(store: &gtk::TreeStore, state: &Rc<RefCell<ProjectState>>) {
+        store.clear();
+
+        let root_path = Self::mlt_collection_directory_path(state);
+        if let Err(error) = Self::append_mlt_tree_path(store, None, &root_path) {
+            let message = format!("{} ({error})", root_path.display());
+            store.insert_with_values(
+                None,
+                None,
+                &[(0, &message), (1, &String::new()), (2, &false)],
+            );
+        }
+    }
+
+    fn install_mlt_tree_view(
+        tree_view: &gtk::TreeView,
+        store: &gtk::TreeStore,
+        viewer_list: &gtk::ListBox,
+        window: &gtk::ApplicationWindow,
+        state: &Rc<RefCell<ProjectState>>,
+    ) {
+        tree_view.set_model(Some(store));
+        tree_view.set_headers_visible(false);
+        tree_view.set_enable_tree_lines(true);
+        tree_view.set_show_expanders(true);
+
+        let renderer = gtk::CellRendererText::new();
+        let column = gtk::TreeViewColumn::new();
+        column.pack_start(&renderer, true);
+        column.add_attribute(&renderer, "text", 0);
+        tree_view.append_column(&column);
+
+        let viewer_list = viewer_list.clone();
+        let window = window.clone();
+        let state = state.clone();
+        tree_view.connect_row_activated(move |tree_view, tree_path, _| {
+            let Some(model) = tree_view.model() else {
+                return;
+            };
+            let Some(iter) = model.iter(tree_path) else {
+                return;
+            };
+
+            let is_file = model.get::<bool>(&iter, 2);
+            if !is_file {
+                if tree_view.row_expanded(tree_path) {
+                    tree_view.collapse_row(tree_path);
+                } else {
+                    tree_view.expand_row(tree_path, false);
+                }
+                return;
+            }
+
+            let path = PathBuf::from(model.get::<String>(&iter, 1));
+            MainWindow::load_mlt_viewer_from_path(&viewer_list, &window, &state, path);
+        });
+
+        tree_view.expand_all();
+    }
+
     fn load_mlt_from_path_async(
         editor_list: &gtk::ListBox,
         window: &gtk::ApplicationWindow,
@@ -774,6 +981,7 @@ impl MainWindow {
     fn install_file_menu(
         app: &Application,
         editor_list: &gtk::ListBox,
+        mlt_tree_store: &gtk::TreeStore,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
         spinner: &gtk::Spinner,
@@ -804,12 +1012,14 @@ impl MainWindow {
 
         let open_action = gio::SimpleAction::new("open-project", None);
         let editor_list_clone = editor_list.clone();
+        let mlt_tree_store_clone = mlt_tree_store.clone();
         let window_clone = window.clone();
         let state_clone = state.clone();
         let loading_controls_clone = loading_controls.clone();
         open_action.connect_activate(move |_, _| {
             MainWindow::show_open_dialog(
                 &editor_list_clone,
+                &mlt_tree_store_clone,
                 &window_clone,
                 &state_clone,
                 &loading_controls_clone,
@@ -911,18 +1121,76 @@ impl MainWindow {
             MainWindow::mark_dirty(&window, &state);
         });
 
+        let main_view_overlay = gtk::Overlay::new();
+        main_view_overlay.set_child(Some(&self.v_box));
+        main_view_overlay.add_overlay(&add_button);
+
+        let mlt_tree_scroll = gtk::ScrolledWindow::new();
+        mlt_tree_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
+        mlt_tree_scroll.set_min_content_width(280);
+        mlt_tree_scroll.set_child(Some(&self.mlt_tree_view));
+
+        self.mlt_viewer_list
+            .set_selection_mode(gtk::SelectionMode::None);
+        self.mlt_viewer_list.set_hexpand(true);
+        self.mlt_viewer_list.set_vexpand(true);
+        let mlt_viewer_scroll = gtk::ScrolledWindow::new();
+        mlt_viewer_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
+        mlt_viewer_scroll.set_child(Some(&self.mlt_viewer_list));
+
+        let mlt_viewer_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
+        mlt_viewer_paned.set_start_child(Some(&mlt_tree_scroll));
+        mlt_viewer_paned.set_resize_start_child(false);
+        mlt_viewer_paned.set_shrink_start_child(false);
+        mlt_viewer_paned.set_end_child(Some(&mlt_viewer_scroll));
+        mlt_viewer_paned.set_resize_end_child(true);
+        mlt_viewer_paned.set_shrink_end_child(false);
+        mlt_viewer_paned.set_position(320);
+
+        Self::install_mlt_tree_view(
+            &self.mlt_tree_view,
+            &self.mlt_tree_store,
+            &self.mlt_viewer_list,
+            &self.window,
+            &self.state,
+        );
+        Self::refresh_mlt_collection_tree(&self.mlt_tree_store, &self.state);
+        self.mlt_tree_view.expand_all();
+
+        let notebook = gtk::Notebook::new();
+        notebook.set_hexpand(true);
+        notebook.set_vexpand(true);
+        notebook.append_page(
+            &main_view_overlay,
+            Some(&gtk::Label::new(Some("Main View"))),
+        );
+        notebook.append_page(
+            &mlt_viewer_paned,
+            Some(&gtk::Label::new(Some("MLT File Viewer"))),
+        );
+
+        let mlt_tree_store = self.mlt_tree_store.clone();
+        let mlt_tree_view = self.mlt_tree_view.clone();
+        let state = self.state.clone();
+        notebook.connect_switch_page(move |_, _, page_num| {
+            if page_num == 1 {
+                MainWindow::refresh_mlt_collection_tree(&mlt_tree_store, &state);
+                mlt_tree_view.expand_all();
+            }
+        });
+
         self.loading_spinner.add_css_class("loading-spinner");
         self.loading_spinner.set_halign(gtk::Align::Center);
         self.loading_spinner.set_valign(gtk::Align::Center);
         Self::set_loading(&self.loading_spinner, false);
 
-        self.overlay.set_child(Some(&self.v_box));
-        self.overlay.add_overlay(&add_button);
+        self.overlay.set_child(Some(&notebook));
         self.overlay.add_overlay(&self.loading_spinner);
 
         Self::install_file_menu(
             app,
             &self.editor_list,
+            &self.mlt_tree_store,
             &self.window,
             &self.state,
             &self.loading_spinner,
