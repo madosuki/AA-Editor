@@ -2,11 +2,13 @@ use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::mpsc;
 
 use gtk4 as gtk;
 
 use gtk::gio;
-use gtk::gio::prelude::ActionMapExt;
+use gtk::gio::prelude::{ActionMapExt, ApplicationExt};
+use gtk::glib;
 use gtk::prelude::{
     ApplicationWindowExt, BoxExt, ButtonExt, Cast, DialogExtManual, FileChooserExt, FileExt,
     GtkApplicationExt, GtkWindowExt, ListBoxRowExt, NativeDialogExt, NativeDialogExtManual,
@@ -30,11 +32,21 @@ struct ProjectState {
     dirty: bool,
 }
 
+#[derive(Clone)]
+struct LoadingControls {
+    spinner: gtk::Spinner,
+    editor_list: gtk::ListBox,
+    add_button: gtk::Button,
+    file_actions: Rc<RefCell<Vec<gio::SimpleAction>>>,
+}
+
 struct MainWindow {
     window: ApplicationWindow,
     v_box: gtk::Box,
     view_window: gtk::ScrolledWindow,
     editor_list: gtk::ListBox,
+    overlay: gtk::Overlay,
+    loading_spinner: gtk::Spinner,
     state: Rc<RefCell<ProjectState>>,
 }
 
@@ -52,6 +64,8 @@ impl MainWindow {
             v_box: gtk::Box::new(gtk::Orientation::Vertical, 1),
             view_window: gtk::ScrolledWindow::new(),
             editor_list: gtk::ListBox::new(),
+            overlay: gtk::Overlay::new(),
+            loading_spinner: gtk::Spinner::new(),
             state: Rc::new(RefCell::new(ProjectState::default())),
         };
 
@@ -67,7 +81,7 @@ impl MainWindow {
         provider.load_from_data(
             ".aa-text-edit {
                 border: 1px solid black;
-                font-family: Monapo, 'MS PGothic', monospace;
+                font-family: Monapo, 'MS PGothic', sans-serif;
                 font-size: 16px;
                 line-height: 18px;
             }
@@ -75,6 +89,11 @@ impl MainWindow {
             .item-info {
                 font-weight: bold;
                 padding: 8px;
+            }
+
+            .loading-spinner {
+                min-width: 48px;
+                min-height: 48px;
             }",
         );
 
@@ -255,6 +274,103 @@ impl MainWindow {
         }
     }
 
+    fn set_loading(spinner: &gtk::Spinner, loading: bool) {
+        spinner.set_visible(loading);
+        if loading {
+            spinner.start();
+        } else {
+            spinner.stop();
+        }
+    }
+
+    fn set_close_buttons_enabled(editor_list: &gtk::ListBox, enabled: bool) {
+        let mut child = editor_list.first_child();
+
+        while let Some(row_widget) = child {
+            child = row_widget.next_sibling();
+
+            let Ok(row) = row_widget.downcast::<gtk::ListBoxRow>() else {
+                continue;
+            };
+            let Some(item_box) = row
+                .child()
+                .and_then(|child| child.downcast::<gtk::Box>().ok())
+            else {
+                continue;
+            };
+
+            let mut item_child = item_box.first_child();
+            while let Some(widget) = item_child {
+                item_child = widget.next_sibling();
+                if let Ok(button) = widget.downcast::<gtk::Button>() {
+                    button.set_sensitive(enabled);
+                }
+            }
+        }
+    }
+
+    fn set_loading_state(controls: &LoadingControls, loading: bool) {
+        let enabled = !loading;
+
+        Self::set_loading(&controls.spinner, loading);
+        controls.add_button.set_sensitive(enabled);
+        Self::set_close_buttons_enabled(&controls.editor_list, enabled);
+        for action in controls.file_actions.borrow().iter() {
+            action.set_enabled(enabled);
+        }
+    }
+
+    fn show_error_dialog(window: &gtk::ApplicationWindow, message: &str) {
+        let dialog = MessageDialog::builder()
+            .transient_for(window)
+            .modal(true)
+            .message_type(MessageType::Error)
+            .buttons(ButtonsType::Ok)
+            .text("ファイルの読み込みに失敗しました")
+            .secondary_text(message)
+            .build();
+
+        dialog.run_async(|dialog, _| {
+            dialog.close();
+        });
+    }
+
+    fn load_project_texts_from_path(path: &Path) -> Result<Vec<String>> {
+        Ok(ProjectFile::read_from_path(path)?.to_texts())
+    }
+
+    fn apply_project_texts(
+        editor_list: &gtk::ListBox,
+        window: &gtk::ApplicationWindow,
+        state: &Rc<RefCell<ProjectState>>,
+        path: PathBuf,
+        texts: Vec<String>,
+    ) {
+        Self::clear_editors(editor_list);
+
+        if texts.is_empty() {
+            Self::append_editor(editor_list, "", window, state);
+        } else {
+            for text in texts {
+                Self::append_editor(editor_list, &text, window, state);
+            }
+        }
+
+        Self::mark_clean(window, state, Some(path));
+    }
+
+    fn apply_mlt_texts(
+        editor_list: &gtk::ListBox,
+        window: &gtk::ApplicationWindow,
+        state: &Rc<RefCell<ProjectState>>,
+        texts: Vec<String>,
+    ) {
+        for text in texts {
+            Self::append_editor(editor_list, &text, window, state);
+        }
+        Self::mark_dirty(window, state);
+    }
+
     fn renumber_editors(editor_list: &gtk::ListBox) {
         let mut index = 1;
         let mut child = editor_list.first_child();
@@ -303,7 +419,7 @@ impl MainWindow {
             .message_type(MessageType::Warning)
             .buttons(ButtonsType::OkCancel)
             .text("このItemを削除しますか？")
-            .secondary_text("OKを押すと、このTextView Itemは削除されます。")
+            .secondary_text("OKを押すと、このItemは削除されます。")
             .build();
 
         let row = row.clone();
@@ -370,26 +486,55 @@ impl MainWindow {
 
         None
     }
-    fn load_project_from_path(
+    fn load_project_from_path_async(
         editor_list: &gtk::ListBox,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
-        path: &Path,
-    ) -> Result<()> {
-        let project_file = ProjectFile::read_from_path(path)?;
-        Self::clear_editors(editor_list);
+        loading_controls: &LoadingControls,
+        path: PathBuf,
+    ) {
+        Self::set_loading_state(loading_controls, true);
 
-        let texts = project_file.to_texts();
-        if texts.is_empty() {
-            Self::append_editor(editor_list, "", window, state);
-        } else {
-            for text in texts {
-                Self::append_editor(editor_list, &text, window, state);
-            }
-        }
+        let editor_list = editor_list.clone();
+        let window = window.clone();
+        let state = state.clone();
+        let loading_controls = loading_controls.clone();
+        glib::spawn_future_local(async move {
+            let (sender, receiver) = mpsc::channel();
+            let path_for_worker = path.clone();
 
-        Self::mark_clean(window, state, Some(path.to_path_buf()));
-        Ok(())
+            std::thread::spawn(move || {
+                let result = MainWindow::load_project_texts_from_path(&path_for_worker)
+                    .map_err(|error| error.to_string());
+                let _ = sender.send(result);
+            });
+
+            glib::idle_add_local(move || match receiver.try_recv() {
+                Ok(Ok(texts)) => {
+                    MainWindow::apply_project_texts(
+                        &editor_list,
+                        &window,
+                        &state,
+                        path.clone(),
+                        texts,
+                    );
+                    MainWindow::set_loading_state(&loading_controls, false);
+                    glib::ControlFlow::Break
+                }
+                Ok(Err(error)) => {
+                    MainWindow::set_loading_state(&loading_controls, false);
+                    MainWindow::show_error_dialog(&window, &error);
+                    glib::ControlFlow::Break
+                }
+                Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    let error = "failed to receive project load result";
+                    MainWindow::set_loading_state(&loading_controls, false);
+                    MainWindow::show_error_dialog(&window, error);
+                    glib::ControlFlow::Break
+                }
+            });
+        });
     }
 
     fn save_project_to_path(
@@ -439,6 +584,7 @@ impl MainWindow {
         editor_list: &gtk::ListBox,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
+        loading_controls: &LoadingControls,
     ) {
         let dialog = FileChooserNative::new(
             Some("プロジェクトを開く"),
@@ -451,14 +597,17 @@ impl MainWindow {
         let editor_list = editor_list.clone();
         let window = window.clone();
         let state = state.clone();
+        let loading_controls = loading_controls.clone();
         dialog.run_async(move |dialog, response| {
             if response == ResponseType::Accept {
                 if let Some(path) = dialog.file().and_then(|file| file.path()) {
-                    if let Err(e) =
-                        MainWindow::load_project_from_path(&editor_list, &window, &state, &path)
-                    {
-                        eprintln!("{e}");
-                    }
+                    MainWindow::load_project_from_path_async(
+                        &editor_list,
+                        &window,
+                        &state,
+                        &loading_controls,
+                        path,
+                    );
                 }
             }
 
@@ -535,28 +684,63 @@ impl MainWindow {
         }
     }
 
-    fn load_mlt_from_path(
-        editor_list: &gtk::ListBox,
-        window: &gtk::ApplicationWindow,
-        state: &Rc<RefCell<ProjectState>>,
-        path: &Path,
-    ) -> Result<()> {
+    fn load_mlt_texts_from_path(path: &Path) -> Result<Vec<String>> {
         let bytes = fs::read(path)
             .with_context(|| format!("failed to read mlt file: {}", path.display()))?;
         let text = Self::decode_mlt_text(bytes);
 
-        for item_text in text.split("[SPLIT]") {
-            Self::append_editor(editor_list, item_text, window, state);
-        }
-        Self::mark_dirty(window, state);
+        Ok(text.split("[SPLIT]").map(|text| text.to_string()).collect())
+    }
 
-        Ok(())
+    fn load_mlt_from_path_async(
+        editor_list: &gtk::ListBox,
+        window: &gtk::ApplicationWindow,
+        state: &Rc<RefCell<ProjectState>>,
+        loading_controls: &LoadingControls,
+        path: PathBuf,
+    ) {
+        Self::set_loading_state(loading_controls, true);
+
+        let editor_list = editor_list.clone();
+        let window = window.clone();
+        let state = state.clone();
+        let loading_controls = loading_controls.clone();
+        glib::spawn_future_local(async move {
+            let (sender, receiver) = mpsc::channel();
+
+            std::thread::spawn(move || {
+                let result =
+                    MainWindow::load_mlt_texts_from_path(&path).map_err(|error| error.to_string());
+                let _ = sender.send(result);
+            });
+
+            glib::idle_add_local(move || match receiver.try_recv() {
+                Ok(Ok(texts)) => {
+                    MainWindow::apply_mlt_texts(&editor_list, &window, &state, texts);
+                    MainWindow::set_loading_state(&loading_controls, false);
+                    glib::ControlFlow::Break
+                }
+                Ok(Err(error)) => {
+                    MainWindow::set_loading_state(&loading_controls, false);
+                    MainWindow::show_error_dialog(&window, &error);
+                    glib::ControlFlow::Break
+                }
+                Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    let error = "failed to receive mlt load result";
+                    MainWindow::set_loading_state(&loading_controls, false);
+                    MainWindow::show_error_dialog(&window, error);
+                    glib::ControlFlow::Break
+                }
+            });
+        });
     }
 
     fn show_import_mlt_dialog(
         editor_list: &gtk::ListBox,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
+        loading_controls: &LoadingControls,
     ) {
         let dialog = FileChooserNative::new(
             Some("MLTを読み込み"),
@@ -569,14 +753,17 @@ impl MainWindow {
         let editor_list = editor_list.clone();
         let window = window.clone();
         let state = state.clone();
+        let loading_controls = loading_controls.clone();
         dialog.run_async(move |dialog, response| {
             if response == ResponseType::Accept {
                 if let Some(path) = dialog.file().and_then(|file| file.path()) {
-                    if let Err(e) =
-                        MainWindow::load_mlt_from_path(&editor_list, &window, &state, &path)
-                    {
-                        eprintln!("{e}");
-                    }
+                    MainWindow::load_mlt_from_path_async(
+                        &editor_list,
+                        &window,
+                        &state,
+                        &loading_controls,
+                        path,
+                    );
                 }
             }
 
@@ -589,7 +776,17 @@ impl MainWindow {
         editor_list: &gtk::ListBox,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
+        spinner: &gtk::Spinner,
+        add_button: &gtk::Button,
     ) {
+        let file_actions = Rc::new(RefCell::new(Vec::new()));
+        let loading_controls = LoadingControls {
+            spinner: spinner.clone(),
+            editor_list: editor_list.clone(),
+            add_button: add_button.clone(),
+            file_actions: file_actions.clone(),
+        };
+
         let file_menu = gio::Menu::new();
         file_menu.append(Some("プロジェクトを開く"), Some("app.open-project"));
         file_menu.append(Some("プロジェクトを上書きで保存"), Some("app.save-project"));
@@ -599,6 +796,7 @@ impl MainWindow {
         );
         file_menu.append(Some("MLTを読み込み"), Some("app.import-mlt"));
         file_menu.append(Some("MLTで出力"), Some("app.export-mlt"));
+        file_menu.append(Some("終了"), Some("app.quit"));
 
         let menu_bar = gio::Menu::new();
         menu_bar.append_submenu(Some("ファイル"), &file_menu);
@@ -608,10 +806,17 @@ impl MainWindow {
         let editor_list_clone = editor_list.clone();
         let window_clone = window.clone();
         let state_clone = state.clone();
+        let loading_controls_clone = loading_controls.clone();
         open_action.connect_activate(move |_, _| {
-            MainWindow::show_open_dialog(&editor_list_clone, &window_clone, &state_clone);
+            MainWindow::show_open_dialog(
+                &editor_list_clone,
+                &window_clone,
+                &state_clone,
+                &loading_controls_clone,
+            );
         });
         app.add_action(&open_action);
+        file_actions.borrow_mut().push(open_action.clone());
 
         let save_action = gio::SimpleAction::new("save-project", None);
         let editor_list_clone = editor_list.clone();
@@ -621,6 +826,7 @@ impl MainWindow {
             MainWindow::save_project(&editor_list_clone, &window_clone, &state_clone);
         });
         app.add_action(&save_action);
+        file_actions.borrow_mut().push(save_action.clone());
         app.set_accels_for_action("app.save-project", &["<Control>s"]);
 
         let save_as_action = gio::SimpleAction::new("save-project-as", None);
@@ -631,15 +837,23 @@ impl MainWindow {
             MainWindow::show_save_as_dialog(&editor_list_clone, &window_clone, &state_clone);
         });
         app.add_action(&save_as_action);
+        file_actions.borrow_mut().push(save_as_action.clone());
 
         let import_mlt_action = gio::SimpleAction::new("import-mlt", None);
         let editor_list_clone = editor_list.clone();
         let window_clone = window.clone();
         let state_clone = state.clone();
+        let loading_controls_clone = loading_controls.clone();
         import_mlt_action.connect_activate(move |_, _| {
-            MainWindow::show_import_mlt_dialog(&editor_list_clone, &window_clone, &state_clone);
+            MainWindow::show_import_mlt_dialog(
+                &editor_list_clone,
+                &window_clone,
+                &state_clone,
+                &loading_controls_clone,
+            );
         });
         app.add_action(&import_mlt_action);
+        file_actions.borrow_mut().push(import_mlt_action.clone());
 
         let export_mlt_action = gio::SimpleAction::new("export-mlt", None);
         let editor_list_clone = editor_list.clone();
@@ -648,6 +862,14 @@ impl MainWindow {
             MainWindow::show_export_mlt_dialog(&editor_list_clone, &window_clone);
         });
         app.add_action(&export_mlt_action);
+        file_actions.borrow_mut().push(export_mlt_action.clone());
+
+        let quit_action = gio::SimpleAction::new("quit", None);
+        let app_clone = app.clone();
+        quit_action.connect_activate(move |_, _| {
+            app_clone.quit();
+        });
+        app.add_action(&quit_action);
     }
 
     fn init(&self, app: &Application, width: i32, height: i32) -> Result<()> {
@@ -693,10 +915,25 @@ impl MainWindow {
         action_box.append(&add_button);
         self.v_box.append(&action_box);
 
-        Self::install_file_menu(app, &self.editor_list, &self.window, &self.state);
+        self.loading_spinner.add_css_class("loading-spinner");
+        self.loading_spinner.set_halign(gtk::Align::Center);
+        self.loading_spinner.set_valign(gtk::Align::Center);
+        Self::set_loading(&self.loading_spinner, false);
+
+        self.overlay.set_child(Some(&self.v_box));
+        self.overlay.add_overlay(&self.loading_spinner);
+
+        Self::install_file_menu(
+            app,
+            &self.editor_list,
+            &self.window,
+            &self.state,
+            &self.loading_spinner,
+            &add_button,
+        );
 
         self.window.set_application(Some(app));
-        self.window.set_child(Some(&self.v_box));
+        self.window.set_child(Some(&self.overlay));
 
         Ok(())
     }
