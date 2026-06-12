@@ -1267,6 +1267,18 @@ impl MainWindow {
         self.v_box.set_hexpand(true);
         self.v_box.set_vexpand(true);
 
+        let container_box = gtk::Box::new(gtk::Orientation::Vertical, 1);
+        container_box.set_halign(gtk::Align::Fill);
+        container_box.set_valign(gtk::Align::Fill);
+        container_box.set_hexpand(true);
+        container_box.set_vexpand(true);
+
+        let main_view_box = gtk::Box::new(gtk::Orientation::Vertical, 1);
+        main_view_box.set_halign(gtk::Align::Fill);
+        main_view_box.set_valign(gtk::Align::Fill);
+        main_view_box.set_hexpand(true);
+        main_view_box.set_vexpand(true);
+
         self.install_text_style();
 
         self.editor_list
@@ -1327,13 +1339,13 @@ impl MainWindow {
         editor_overlay.set_vexpand(true);
         editor_overlay.set_child(Some(&self.view_window));
         editor_overlay.add_overlay(&add_button);
-        self.v_box.append(&editor_overlay);
+        main_view_box.append(&editor_overlay);
 
         self.layer_host.set_halign(gtk::Align::Fill);
         self.layer_host.set_valign(gtk::Align::Fill);
         self.layer_host.set_hexpand(true);
         self.layer_host.set_vexpand(true);
-        self.layer_host.set_child(Some(&self.v_box));
+        self.layer_host.set_child(Some(&main_view_box));
 
         let mlt_tree_scroll = gtk::ScrolledWindow::new();
         mlt_tree_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
@@ -1370,7 +1382,6 @@ impl MainWindow {
         let notebook = gtk::Notebook::new();
         notebook.set_hexpand(true);
         notebook.set_vexpand(true);
-        notebook.append_page(&self.layer_host, Some(&gtk::Label::new(Some("Main View"))));
         notebook.append_page(
             &mlt_viewer_paned,
             Some(&gtk::Label::new(Some("MLT File Viewer"))),
@@ -1390,8 +1401,11 @@ impl MainWindow {
         self.loading_spinner.set_valign(gtk::Align::Center);
         Self::set_loading(&self.loading_spinner, false);
 
-        self.overlay.set_child(Some(&notebook));
+        self.overlay.set_child(Some(&self.layer_host));
         self.overlay.add_overlay(&self.loading_spinner);
+        notebook.prepend_page(&self.overlay, Some(&gtk::Label::new(Some("Main View"))));
+        container_box.append(&notebook);
+        self.v_box.append(&container_box);
 
         Self::install_file_menu(
             app,
@@ -1406,7 +1420,7 @@ impl MainWindow {
         );
 
         self.window.set_application(Some(app));
-        self.window.set_child(Some(&self.overlay));
+        self.window.set_child(Some(&self.v_box));
 
         Ok(())
     }

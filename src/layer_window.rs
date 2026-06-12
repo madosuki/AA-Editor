@@ -50,7 +50,7 @@ impl LayerWindow {
             drag.connect_drag_update(move |_, offset_x, offset_y| {
                 let final_x = (start_x.get() + offset_x).max(0.0).round();
                 let final_y = (start_y.get() + offset_y).max(0.0).round();
-
+                
                 frame_cloned.set_margin_start(final_x as i32);
                 frame_cloned.set_margin_top(final_y as i32);
             });
