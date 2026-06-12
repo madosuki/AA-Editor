@@ -218,12 +218,12 @@ impl MainWindow {
         editor_row.set_activatable(false);
         editor_row.set_selectable(false);
 
-        let item_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        item_box.set_hexpand(true);
-        item_box.set_vexpand(false);
+        let row_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
+        row_paned.set_hexpand(true);
+        row_paned.set_vexpand(false);
 
         let left_pane = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        left_pane.set_width_request(120);
+        left_pane.set_size_request(120, -1);
         left_pane.set_valign(gtk::Align::Start);
 
         let item_info = gtk::Label::new(None);
@@ -295,10 +295,23 @@ impl MainWindow {
             left_pane.append(&add_layer_button);
         }
 
-        item_box.append(&left_pane);
-        item_box.append(&text_view);
+        let editor_overlay = gtk::Overlay::new();
+        editor_overlay.set_hexpand(true);
+        editor_overlay.set_vexpand(true);
+        editor_overlay.set_child(Some(&text_view));
+
+        let editor_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
+        editor_paned.set_hexpand(true);
+        editor_paned.set_vexpand(true);
+        editor_paned.set_start_child(Some(&editor_overlay));
+        editor_paned.set_resize_start_child(true);
+        editor_paned.set_shrink_start_child(false);
 
         if !read_only {
+            let controls_pane = gtk::Box::new(gtk::Orientation::Vertical, 8);
+            controls_pane.set_size_request(96, -1);
+            controls_pane.set_valign(gtk::Align::Start);
+
             let close_button = gtk::Button::with_label("Close");
             close_button.set_valign(gtk::Align::Start);
 
@@ -316,10 +329,23 @@ impl MainWindow {
                     );
                 }
             });
-            item_box.append(&close_button);
+            controls_pane.append(&close_button);
+
+            editor_paned.set_end_child(Some(&controls_pane));
+            editor_paned.set_resize_end_child(false);
+            editor_paned.set_shrink_end_child(false);
+            editor_paned.set_position(1024);
         }
 
-        editor_row.set_child(Some(&item_box));
+        row_paned.set_start_child(Some(&left_pane));
+        row_paned.set_resize_start_child(false);
+        row_paned.set_shrink_start_child(false);
+        row_paned.set_end_child(Some(&editor_paned));
+        row_paned.set_resize_end_child(true);
+        row_paned.set_shrink_end_child(false);
+        row_paned.set_position(136);
+
+        editor_row.set_child(Some(&row_paned));
         editor_row
     }
 
@@ -379,28 +405,29 @@ impl MainWindow {
         }
     }
 
+    fn set_buttons_enabled(widget: &gtk::Widget, enabled: bool) {
+        if let Ok(button) = widget.clone().downcast::<gtk::Button>() {
+            button.set_sensitive(enabled);
+        }
+
+        let mut child = widget.first_child();
+        while let Some(child_widget) = child {
+            child = child_widget.next_sibling();
+            Self::set_buttons_enabled(&child_widget, enabled);
+        }
+    }
+
     fn set_close_buttons_enabled(editor_list: &gtk::ListBox, enabled: bool) {
         let mut child = editor_list.first_child();
 
         while let Some(row_widget) = child {
             child = row_widget.next_sibling();
 
-            let Ok(row) = row_widget.downcast::<gtk::ListBoxRow>() else {
+            let Ok(row) = row_widget.clone().downcast::<gtk::ListBoxRow>() else {
                 continue;
             };
-            let Some(item_box) = row
-                .child()
-                .and_then(|child| child.downcast::<gtk::Box>().ok())
-            else {
-                continue;
-            };
-
-            let mut item_child = item_box.first_child();
-            while let Some(widget) = item_child {
-                item_child = widget.next_sibling();
-                if let Ok(button) = widget.downcast::<gtk::Button>() {
-                    button.set_sensitive(enabled);
-                }
+            if let Some(content) = row.child() {
+                Self::set_buttons_enabled(&content, enabled);
             }
         }
     }
@@ -486,25 +513,13 @@ impl MainWindow {
             let Ok(row) = row_widget.downcast::<gtk::ListBoxRow>() else {
                 continue;
             };
-            let Some(item_box) = row
-                .child()
-                .and_then(|child| child.downcast::<gtk::Box>().ok())
-            else {
+            let Some(content) = row.child() else {
                 continue;
             };
-            let Some(left_pane) = item_box
-                .first_child()
-                .and_then(|child| child.downcast::<gtk::Box>().ok())
-            else {
+            let Some(info_label) = Self::info_label_from_row_content(content.clone()) else {
                 continue;
             };
-            let Some(info_label) = left_pane
-                .first_child()
-                .and_then(|child| child.downcast::<gtk::Label>().ok())
-            else {
-                continue;
-            };
-            let Some(text_view) = Self::text_view_from_row_content(row.child().unwrap()) else {
+            let Some(text_view) = Self::text_view_from_row_content(content) else {
                 continue;
             };
 
@@ -514,9 +529,7 @@ impl MainWindow {
     }
 
     fn item_number_from_row(row: &gtk::ListBoxRow) -> Option<u64> {
-        let item_box = row.child()?.downcast::<gtk::Box>().ok()?;
-        let left_pane = item_box.first_child()?.downcast::<gtk::Box>().ok()?;
-        let info_label = left_pane.first_child()?.downcast::<gtk::Label>().ok()?;
+        let info_label = Self::info_label_from_row_content(row.child()?)?;
 
         Some(Self::item_number_from_info_label(&info_label) as u64)
     }
@@ -610,19 +623,33 @@ impl MainWindow {
         texts
     }
 
+    fn info_label_from_row_content(widget: gtk::Widget) -> Option<gtk::Label> {
+        if let Ok(label) = widget.clone().downcast::<gtk::Label>() {
+            if label.has_css_class("item-info") {
+                return Some(label);
+            }
+        }
+
+        let mut child = widget.first_child();
+        while let Some(child_widget) = child {
+            child = child_widget.next_sibling();
+            if let Some(label) = Self::info_label_from_row_content(child_widget) {
+                return Some(label);
+            }
+        }
+
+        None
+    }
+
     fn text_view_from_row_content(widget: gtk::Widget) -> Option<gtk::TextView> {
         if let Ok(text_view) = widget.clone().downcast::<gtk::TextView>() {
             return Some(text_view);
         }
 
-        let Ok(item_box) = widget.downcast::<gtk::Box>() else {
-            return None;
-        };
-
-        let mut child = item_box.first_child();
+        let mut child = widget.first_child();
         while let Some(widget) = child {
             child = widget.next_sibling();
-            if let Ok(text_view) = widget.downcast::<gtk::TextView>() {
+            if let Some(text_view) = Self::text_view_from_row_content(widget) {
                 return Some(text_view);
             }
         }
@@ -1256,13 +1283,6 @@ impl MainWindow {
         );
         Self::mark_clean(&self.window, &self.state, None);
 
-        self.view_window.set_child(Some(&self.editor_list));
-        self.view_window
-            .set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
-        self.view_window.set_hexpand(true);
-        self.view_window.set_vexpand(true);
-        self.v_box.append(&self.view_window);
-
         let add_button = gtk::Button::with_label("Add");
         add_button.set_halign(gtk::Align::End);
         add_button.set_valign(gtk::Align::End);
@@ -1294,12 +1314,26 @@ impl MainWindow {
             MainWindow::mark_dirty(&window, &state);
         });
 
+        self.view_window.set_child(Some(&self.editor_list));
+        self.view_window
+            .set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
+        self.view_window.set_hexpand(true);
+        self.view_window.set_vexpand(true);
+
+        let editor_overlay = gtk::Overlay::new();
+        editor_overlay.set_halign(gtk::Align::Fill);
+        editor_overlay.set_valign(gtk::Align::Fill);
+        editor_overlay.set_hexpand(true);
+        editor_overlay.set_vexpand(true);
+        editor_overlay.set_child(Some(&self.view_window));
+        editor_overlay.add_overlay(&add_button);
+        self.v_box.append(&editor_overlay);
+
         self.layer_host.set_halign(gtk::Align::Fill);
         self.layer_host.set_valign(gtk::Align::Fill);
         self.layer_host.set_hexpand(true);
         self.layer_host.set_vexpand(true);
         self.layer_host.set_child(Some(&self.v_box));
-        self.layer_host.add_overlay(&add_button);
 
         let mlt_tree_scroll = gtk::ScrolledWindow::new();
         mlt_tree_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
