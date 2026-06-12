@@ -19,6 +19,7 @@ use gtk::{
 use anyhow::{Context, Result};
 use encoding_rs::SHIFT_JIS;
 
+use crate::layer_window::LayerWindow;
 use crate::project_file::ProjectFile;
 
 const APP_TITLE: &str = "AA Editor";
@@ -46,6 +47,7 @@ struct MainWindow {
     mlt_tree_store: gtk::TreeStore,
     mlt_tree_view: gtk::TreeView,
     mlt_viewer_list: gtk::ListBox,
+    layer_window: LayerWindow,
     overlay: gtk::Overlay,
     loading_spinner: gtk::Spinner,
     state: Rc<RefCell<ProjectState>>,
@@ -72,6 +74,7 @@ impl MainWindow {
             ]),
             mlt_tree_view: gtk::TreeView::new(),
             mlt_viewer_list: gtk::ListBox::new(),
+            layer_window: LayerWindow::new(),
             overlay: gtk::Overlay::new(),
             loading_spinner: gtk::Spinner::new(),
             state: Rc::new(RefCell::new(ProjectState::default())),
@@ -206,7 +209,7 @@ impl MainWindow {
         editor_row.set_margin_bottom(6);
         editor_row.set_margin_start(8);
         editor_row.set_margin_end(8);
-        editor_row.set_vexpand(false);
+        editor_row.set_vexpand(true);
         editor_row.set_activatable(false);
         editor_row.set_selectable(false);
 
@@ -231,12 +234,12 @@ impl MainWindow {
         text_view.set_bottom_margin(8);
         text_view.set_wrap_mode(gtk::WrapMode::None);
         text_view.set_accepts_tab(true);
-        text_view.set_monospace(true);
+        // text_view.set_monospace(true);
         text_view.set_editable(!read_only);
         text_view.set_cursor_visible(!read_only);
         text_view.set_hexpand(true);
         text_view.set_vexpand(true);
-        text_view.set_size_request(800, 600);
+        text_view.set_size_request(1024, 768);
         text_view.buffer().set_text(text);
         Self::update_item_info_label(0, &text_view.buffer(), &item_info);
 
@@ -1113,6 +1116,15 @@ impl MainWindow {
         add_button.set_margin_end(16);
         add_button.set_margin_bottom(16);
 
+        // let compose_button = gtk::Button::with_label("Compose");
+        // compose_button.set_halign(gtk::Align::Center);
+        // compose_button.set_valign(gtk::Align::Center);
+
+        // let footer = gtk::Box::new(gtk::Orientation::Horizontal, 1);
+        // footer.append(&add_button);
+        // footer.append(&compose_button);
+
+
         let editor_list = self.editor_list.clone();
         let window = self.window.clone();
         let state = self.state.clone();
@@ -1168,6 +1180,11 @@ impl MainWindow {
             &mlt_viewer_paned,
             Some(&gtk::Label::new(Some("MLT File Viewer"))),
         );
+        self.layer_window.init("layer 1".to_owned(), 1280, 960);
+        notebook.append_page(
+            self.layer_window.widget(),
+            Some(&gtk::Label::new(Some("Layer View"))),
+        );
 
         let mlt_tree_store = self.mlt_tree_store.clone();
         let mlt_tree_view = self.mlt_tree_view.clone();
@@ -1210,7 +1227,7 @@ impl MainWindow {
 
 pub fn activate(app: &Application) {
     let main = MainWindow::new(app);
-    match main.init(app, 1024, 768) {
+    match main.init(app, 1280, 960) {
         Ok(_) => {
             main.run();
         }

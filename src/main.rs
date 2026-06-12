@@ -1,6 +1,7 @@
 mod main_window;
 mod project_file;
 mod settings;
+mod layer_window;
 
 use gtk::Application;
 use gtk::gio::prelude::{ApplicationExt, ApplicationExtManual};
