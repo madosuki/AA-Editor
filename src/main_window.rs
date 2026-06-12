@@ -235,8 +235,8 @@ impl MainWindow {
         text_view.set_editable(!read_only);
         text_view.set_cursor_visible(!read_only);
         text_view.set_hexpand(true);
-        text_view.set_vexpand(false);
-        text_view.set_size_request(640, 480);
+        text_view.set_vexpand(true);
+        text_view.set_size_request(800, 600);
         text_view.buffer().set_text(text);
         Self::update_item_info_label(0, &text_view.buffer(), &item_info);
 
