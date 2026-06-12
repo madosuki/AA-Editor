@@ -1390,6 +1390,7 @@ impl MainWindow {
         self.overlay.set_child(Some(&self.layer_host));
         self.overlay.add_overlay(&self.loading_spinner);
         notebook.prepend_page(&self.overlay, Some(&gtk::Label::new(Some("Main View"))));
+        notebook.set_current_page(Some(0));
         self.v_box.append(&notebook);
 
         Self::install_file_menu(
