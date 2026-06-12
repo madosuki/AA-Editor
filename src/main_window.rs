@@ -206,7 +206,7 @@ impl MainWindow {
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
         layer_windows: Option<&Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>>,
-        layer_host: Option<&gtk::Overlay>,
+        _layer_host: Option<&gtk::Overlay>,
         read_only: bool,
     ) -> gtk::ListBoxRow {
         let editor_row = gtk::ListBoxRow::new();
@@ -248,6 +248,12 @@ impl MainWindow {
         text_view.buffer().set_text(text);
         Self::update_item_info_label(0, &text_view.buffer(), &item_info);
 
+        let text_fixed = gtk::Fixed::new();
+        text_fixed.set_hexpand(true);
+        text_fixed.set_vexpand(true);
+        text_fixed.set_size_request(1024, 768);
+        text_fixed.put(&text_view, 0.0, 0.0);
+
         if !read_only {
             let window_for_change = window.clone();
             let state_for_change = state.clone();
@@ -261,13 +267,13 @@ impl MainWindow {
 
         left_pane.append(&item_info);
 
-        if let (Some(layer_windows), Some(layer_host)) = (layer_windows, layer_host) {
+        if let Some(layer_windows) = layer_windows {
             let add_layer_button = gtk::Button::with_label("Add Layer");
             add_layer_button.set_valign(gtk::Align::Start);
 
             let item_info_for_layer = item_info.clone();
             let layer_windows = layer_windows.clone();
-            let layer_host = layer_host.clone();
+            let text_fixed = text_fixed.clone();
             add_layer_button.connect_clicked(move |_| {
                 let item_number = Self::item_number_from_info_label(&item_info_for_layer) as u64;
                 if item_number == 0 {
@@ -283,7 +289,7 @@ impl MainWindow {
                 let layer_window = LayerWindow::new();
                 let title = format!("Item {item_number} Layer {layer_number}");
                 layer_window.init(title, 640, 480);
-                layer_window.attach_to(&layer_host);
+                layer_window.attach_to(&text_fixed);
 
                 layer_windows
                     .borrow_mut()
@@ -296,7 +302,7 @@ impl MainWindow {
         }
 
         item_box.append(&left_pane);
-        item_box.append(&text_view);
+        item_box.append(&text_fixed);
 
         if !read_only {
             let close_button = gtk::Button::with_label("Close");
@@ -615,14 +621,10 @@ impl MainWindow {
             return Some(text_view);
         }
 
-        let Ok(item_box) = widget.downcast::<gtk::Box>() else {
-            return None;
-        };
-
-        let mut child = item_box.first_child();
+        let mut child = widget.first_child();
         while let Some(widget) = child {
             child = widget.next_sibling();
-            if let Ok(text_view) = widget.downcast::<gtk::TextView>() {
+            if let Some(text_view) = Self::text_view_from_row_content(widget) {
                 return Some(text_view);
             }
         }
