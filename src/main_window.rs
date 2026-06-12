@@ -1267,12 +1267,6 @@ impl MainWindow {
         self.v_box.set_hexpand(true);
         self.v_box.set_vexpand(true);
 
-        let container_box = gtk::Box::new(gtk::Orientation::Vertical, 1);
-        container_box.set_halign(gtk::Align::Fill);
-        container_box.set_valign(gtk::Align::Fill);
-        container_box.set_hexpand(true);
-        container_box.set_vexpand(true);
-
         let main_view_box = gtk::Box::new(gtk::Orientation::Vertical, 1);
         main_view_box.set_halign(gtk::Align::Fill);
         main_view_box.set_valign(gtk::Align::Fill);
@@ -1300,14 +1294,6 @@ impl MainWindow {
         add_button.set_valign(gtk::Align::End);
         add_button.set_margin_end(16);
         add_button.set_margin_bottom(16);
-
-        // let compose_button = gtk::Button::with_label("Compose");
-        // compose_button.set_halign(gtk::Align::Center);
-        // compose_button.set_valign(gtk::Align::Center);
-
-        // let footer = gtk::Box::new(gtk::Orientation::Horizontal, 1);
-        // footer.append(&add_button);
-        // footer.append(&compose_button);
 
         let editor_list = self.editor_list.clone();
         let window = self.window.clone();
@@ -1404,8 +1390,7 @@ impl MainWindow {
         self.overlay.set_child(Some(&self.layer_host));
         self.overlay.add_overlay(&self.loading_spinner);
         notebook.prepend_page(&self.overlay, Some(&gtk::Label::new(Some("Main View"))));
-        container_box.append(&notebook);
-        self.v_box.append(&container_box);
+        self.v_box.append(&notebook);
 
         Self::install_file_menu(
             app,
