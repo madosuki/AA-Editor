@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -47,7 +48,8 @@ struct MainWindow {
     mlt_tree_store: gtk::TreeStore,
     mlt_tree_view: gtk::TreeView,
     mlt_viewer_list: gtk::ListBox,
-    layer_window: LayerWindow,
+    layer_windows: Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
+    layer_host: gtk::Overlay,
     overlay: gtk::Overlay,
     loading_spinner: gtk::Spinner,
     state: Rc<RefCell<ProjectState>>,
@@ -74,7 +76,8 @@ impl MainWindow {
             ]),
             mlt_tree_view: gtk::TreeView::new(),
             mlt_viewer_list: gtk::ListBox::new(),
-            layer_window: LayerWindow::new(),
+            layer_windows: Rc::new(RefCell::new(HashMap::new())),
+            layer_host: gtk::Overlay::new(),
             overlay: gtk::Overlay::new(),
             loading_spinner: gtk::Spinner::new(),
             state: Rc::new(RefCell::new(ProjectState::default())),
@@ -202,6 +205,8 @@ impl MainWindow {
         text: &str,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
+        layer_windows: Option<&Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>>,
+        layer_host: Option<&gtk::Overlay>,
         read_only: bool,
     ) -> gtk::ListBoxRow {
         let editor_row = gtk::ListBoxRow::new();
@@ -256,6 +261,40 @@ impl MainWindow {
 
         left_pane.append(&item_info);
 
+        if let (Some(layer_windows), Some(layer_host)) = (layer_windows, layer_host) {
+            let add_layer_button = gtk::Button::with_label("Add Layer");
+            add_layer_button.set_valign(gtk::Align::Start);
+
+            let item_info_for_layer = item_info.clone();
+            let layer_windows = layer_windows.clone();
+            let layer_host = layer_host.clone();
+            add_layer_button.connect_clicked(move |_| {
+                let item_number = Self::item_number_from_info_label(&item_info_for_layer) as u64;
+                if item_number == 0 {
+                    return;
+                }
+
+                let layer_number = layer_windows
+                    .borrow()
+                    .get(&item_number)
+                    .map(|layers| layers.len() + 1)
+                    .unwrap_or(1);
+
+                let layer_window = LayerWindow::new();
+                let title = format!("Item {item_number} Layer {layer_number}");
+                layer_window.init(title, 640, 480);
+                layer_window.attach_to(&layer_host);
+
+                layer_windows
+                    .borrow_mut()
+                    .entry(item_number)
+                    .or_default()
+                    .push(layer_window);
+            });
+
+            left_pane.append(&add_layer_button);
+        }
+
         item_box.append(&left_pane);
         item_box.append(&text_view);
 
@@ -266,12 +305,16 @@ impl MainWindow {
             let row_for_delete = editor_row.clone();
             let window_for_delete = window.clone();
             let state_for_delete = state.clone();
+            let layer_windows_for_delete = layer_windows.cloned();
             close_button.connect_clicked(move |_| {
-                MainWindow::confirm_remove_editor_row(
-                    &row_for_delete,
-                    &window_for_delete,
-                    &state_for_delete,
-                );
+                if let Some(layer_windows) = &layer_windows_for_delete {
+                    MainWindow::confirm_remove_editor_row(
+                        &row_for_delete,
+                        &window_for_delete,
+                        &state_for_delete,
+                        layer_windows,
+                    );
+                }
             });
             item_box.append(&close_button);
         }
@@ -285,8 +328,17 @@ impl MainWindow {
         text: &str,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
+        layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
+        layer_host: &gtk::Overlay,
     ) {
-        editor_list.append(&Self::create_editor_row(text, window, state, false));
+        editor_list.append(&Self::create_editor_row(
+            text,
+            window,
+            state,
+            Some(layer_windows),
+            Some(layer_host),
+            false,
+        ));
         Self::renumber_editors(editor_list);
     }
 
@@ -296,7 +348,9 @@ impl MainWindow {
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
     ) {
-        viewer_list.append(&Self::create_editor_row(text, window, state, true));
+        viewer_list.append(&Self::create_editor_row(
+            text, window, state, None, None, true,
+        ));
         Self::renumber_editors(viewer_list);
     }
 
@@ -304,6 +358,16 @@ impl MainWindow {
         while let Some(child) = editor_list.first_child() {
             editor_list.remove(&child);
         }
+    }
+
+    fn clear_layer_windows(layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>) {
+        let mut layer_windows = layer_windows.borrow_mut();
+        for layers in layer_windows.values() {
+            for layer in layers {
+                layer.remove_from_parent();
+            }
+        }
+        layer_windows.clear();
     }
 
     fn set_loading(spinner: &gtk::Spinner, loading: bool) {
@@ -376,17 +440,20 @@ impl MainWindow {
         mlt_tree_store: &gtk::TreeStore,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
+        layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
+        layer_host: &gtk::Overlay,
         path: PathBuf,
         project_file: ProjectFile,
     ) {
         Self::clear_editors(editor_list);
+        Self::clear_layer_windows(layer_windows);
         let texts = project_file.to_texts();
 
         if texts.is_empty() {
-            Self::append_editor(editor_list, "", window, state);
+            Self::append_editor(editor_list, "", window, state, layer_windows, layer_host);
         } else {
             for text in texts {
-                Self::append_editor(editor_list, &text, window, state);
+                Self::append_editor(editor_list, &text, window, state, layer_windows, layer_host);
             }
         }
 
@@ -399,10 +466,12 @@ impl MainWindow {
         editor_list: &gtk::ListBox,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
+        layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
+        layer_host: &gtk::Overlay,
         texts: Vec<String>,
     ) {
         for text in texts {
-            Self::append_editor(editor_list, &text, window, state);
+            Self::append_editor(editor_list, &text, window, state, layer_windows, layer_host);
         }
         Self::mark_dirty(window, state);
     }
@@ -444,10 +513,44 @@ impl MainWindow {
         }
     }
 
+    fn item_number_from_row(row: &gtk::ListBoxRow) -> Option<u64> {
+        let item_box = row.child()?.downcast::<gtk::Box>().ok()?;
+        let left_pane = item_box.first_child()?.downcast::<gtk::Box>().ok()?;
+        let info_label = left_pane.first_child()?.downcast::<gtk::Label>().ok()?;
+
+        Some(Self::item_number_from_info_label(&info_label) as u64)
+    }
+
+    fn remove_layer_windows_for_item(
+        layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
+        removed_item_number: u64,
+    ) {
+        let mut layer_windows = layer_windows.borrow_mut();
+        if let Some(layers) = layer_windows.remove(&removed_item_number) {
+            for layer in layers {
+                layer.remove_from_parent();
+            }
+        }
+
+        let mut keys_to_shift = layer_windows
+            .keys()
+            .copied()
+            .filter(|key| *key > removed_item_number)
+            .collect::<Vec<_>>();
+        keys_to_shift.sort_unstable();
+
+        for key in keys_to_shift {
+            if let Some(layers) = layer_windows.remove(&key) {
+                layer_windows.insert(key - 1, layers);
+            }
+        }
+    }
+
     fn confirm_remove_editor_row(
         row: &gtk::ListBoxRow,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
+        layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
     ) {
         let dialog = MessageDialog::builder()
             .transient_for(window)
@@ -461,12 +564,16 @@ impl MainWindow {
         let row = row.clone();
         let window = window.clone();
         let state = state.clone();
+        let layer_windows = layer_windows.clone();
         dialog.run_async(move |dialog, response| {
             if response == ResponseType::Ok {
                 if let Some(parent) = row
                     .parent()
                     .and_then(|parent| parent.downcast::<gtk::ListBox>().ok())
                 {
+                    if let Some(item_number) = MainWindow::item_number_from_row(&row) {
+                        MainWindow::remove_layer_windows_for_item(&layer_windows, item_number);
+                    }
                     parent.remove(&row);
                     MainWindow::renumber_editors(&parent);
                     MainWindow::mark_dirty(&window, &state);
@@ -527,6 +634,8 @@ impl MainWindow {
         mlt_tree_store: &gtk::TreeStore,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
+        layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
+        layer_host: &gtk::Overlay,
         loading_controls: &LoadingControls,
         path: PathBuf,
     ) {
@@ -536,6 +645,8 @@ impl MainWindow {
         let mlt_tree_store = mlt_tree_store.clone();
         let window = window.clone();
         let state = state.clone();
+        let layer_windows = layer_windows.clone();
+        let layer_host = layer_host.clone();
         let loading_controls = loading_controls.clone();
         glib::spawn_future_local(async move {
             let (sender, receiver) = mpsc::channel();
@@ -554,6 +665,8 @@ impl MainWindow {
                         &mlt_tree_store,
                         &window,
                         &state,
+                        &layer_windows,
+                        &layer_host,
                         path.clone(),
                         project_file,
                     );
@@ -626,6 +739,8 @@ impl MainWindow {
         mlt_tree_store: &gtk::TreeStore,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
+        layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
+        layer_host: &gtk::Overlay,
         loading_controls: &LoadingControls,
     ) {
         let dialog = FileChooserNative::new(
@@ -640,6 +755,8 @@ impl MainWindow {
         let mlt_tree_store = mlt_tree_store.clone();
         let window = window.clone();
         let state = state.clone();
+        let layer_windows = layer_windows.clone();
+        let layer_host = layer_host.clone();
         let loading_controls = loading_controls.clone();
         dialog.run_async(move |dialog, response| {
             if response == ResponseType::Accept {
@@ -649,6 +766,8 @@ impl MainWindow {
                         &mlt_tree_store,
                         &window,
                         &state,
+                        &layer_windows,
+                        &layer_host,
                         &loading_controls,
                         path,
                     );
@@ -906,6 +1025,8 @@ impl MainWindow {
         editor_list: &gtk::ListBox,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
+        layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
+        layer_host: &gtk::Overlay,
         loading_controls: &LoadingControls,
         path: PathBuf,
     ) {
@@ -914,6 +1035,8 @@ impl MainWindow {
         let editor_list = editor_list.clone();
         let window = window.clone();
         let state = state.clone();
+        let layer_windows = layer_windows.clone();
+        let layer_host = layer_host.clone();
         let loading_controls = loading_controls.clone();
         glib::spawn_future_local(async move {
             let (sender, receiver) = mpsc::channel();
@@ -926,7 +1049,14 @@ impl MainWindow {
 
             glib::idle_add_local(move || match receiver.try_recv() {
                 Ok(Ok(texts)) => {
-                    MainWindow::apply_mlt_texts(&editor_list, &window, &state, texts);
+                    MainWindow::apply_mlt_texts(
+                        &editor_list,
+                        &window,
+                        &state,
+                        &layer_windows,
+                        &layer_host,
+                        texts,
+                    );
                     MainWindow::set_loading_state(&loading_controls, false);
                     glib::ControlFlow::Break
                 }
@@ -950,6 +1080,8 @@ impl MainWindow {
         editor_list: &gtk::ListBox,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
+        layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
+        layer_host: &gtk::Overlay,
         loading_controls: &LoadingControls,
     ) {
         let dialog = FileChooserNative::new(
@@ -963,6 +1095,8 @@ impl MainWindow {
         let editor_list = editor_list.clone();
         let window = window.clone();
         let state = state.clone();
+        let layer_windows = layer_windows.clone();
+        let layer_host = layer_host.clone();
         let loading_controls = loading_controls.clone();
         dialog.run_async(move |dialog, response| {
             if response == ResponseType::Accept {
@@ -971,6 +1105,8 @@ impl MainWindow {
                         &editor_list,
                         &window,
                         &state,
+                        &layer_windows,
+                        &layer_host,
                         &loading_controls,
                         path,
                     );
@@ -987,6 +1123,8 @@ impl MainWindow {
         mlt_tree_store: &gtk::TreeStore,
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
+        layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
+        layer_host: &gtk::Overlay,
         spinner: &gtk::Spinner,
         add_button: &gtk::Button,
     ) {
@@ -1018,6 +1156,8 @@ impl MainWindow {
         let mlt_tree_store_clone = mlt_tree_store.clone();
         let window_clone = window.clone();
         let state_clone = state.clone();
+        let layer_windows_clone = layer_windows.clone();
+        let layer_host_clone = layer_host.clone();
         let loading_controls_clone = loading_controls.clone();
         open_action.connect_activate(move |_, _| {
             MainWindow::show_open_dialog(
@@ -1025,6 +1165,8 @@ impl MainWindow {
                 &mlt_tree_store_clone,
                 &window_clone,
                 &state_clone,
+                &layer_windows_clone,
+                &layer_host_clone,
                 &loading_controls_clone,
             );
         });
@@ -1056,12 +1198,16 @@ impl MainWindow {
         let editor_list_clone = editor_list.clone();
         let window_clone = window.clone();
         let state_clone = state.clone();
+        let layer_windows_clone = layer_windows.clone();
+        let layer_host_clone = layer_host.clone();
         let loading_controls_clone = loading_controls.clone();
         import_mlt_action.connect_activate(move |_, _| {
             MainWindow::show_import_mlt_dialog(
                 &editor_list_clone,
                 &window_clone,
                 &state_clone,
+                &layer_windows_clone,
+                &layer_host_clone,
                 &loading_controls_clone,
             );
         });
@@ -1100,7 +1246,14 @@ impl MainWindow {
             .set_selection_mode(gtk::SelectionMode::None);
         self.editor_list.set_hexpand(true);
         self.editor_list.set_vexpand(true);
-        Self::append_editor(&self.editor_list, "", &self.window, &self.state);
+        Self::append_editor(
+            &self.editor_list,
+            "",
+            &self.window,
+            &self.state,
+            &self.layer_windows,
+            &self.layer_host,
+        );
         Self::mark_clean(&self.window, &self.state, None);
 
         self.view_window.set_child(Some(&self.editor_list));
@@ -1124,18 +1277,29 @@ impl MainWindow {
         // footer.append(&add_button);
         // footer.append(&compose_button);
 
-
         let editor_list = self.editor_list.clone();
         let window = self.window.clone();
         let state = self.state.clone();
+        let layer_windows = self.layer_windows.clone();
+        let layer_host = self.layer_host.clone();
         add_button.connect_clicked(move |_| {
-            MainWindow::append_editor(&editor_list, "", &window, &state);
+            MainWindow::append_editor(
+                &editor_list,
+                "",
+                &window,
+                &state,
+                &layer_windows,
+                &layer_host,
+            );
             MainWindow::mark_dirty(&window, &state);
         });
 
-        let main_view_overlay = gtk::Overlay::new();
-        main_view_overlay.set_child(Some(&self.v_box));
-        main_view_overlay.add_overlay(&add_button);
+        self.layer_host.set_halign(gtk::Align::Fill);
+        self.layer_host.set_valign(gtk::Align::Fill);
+        self.layer_host.set_hexpand(true);
+        self.layer_host.set_vexpand(true);
+        self.layer_host.set_child(Some(&self.v_box));
+        self.layer_host.add_overlay(&add_button);
 
         let mlt_tree_scroll = gtk::ScrolledWindow::new();
         mlt_tree_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
@@ -1172,20 +1336,11 @@ impl MainWindow {
         let notebook = gtk::Notebook::new();
         notebook.set_hexpand(true);
         notebook.set_vexpand(true);
-        notebook.append_page(
-            &main_view_overlay,
-            Some(&gtk::Label::new(Some("Main View"))),
-        );
+        notebook.append_page(&self.layer_host, Some(&gtk::Label::new(Some("Main View"))));
         notebook.append_page(
             &mlt_viewer_paned,
             Some(&gtk::Label::new(Some("MLT File Viewer"))),
         );
-        self.layer_window.init("layer 1".to_owned(), 1280, 960);
-        notebook.append_page(
-            self.layer_window.widget(),
-            Some(&gtk::Label::new(Some("Layer View"))),
-        );
-
         let mlt_tree_store = self.mlt_tree_store.clone();
         let mlt_tree_view = self.mlt_tree_view.clone();
         let state = self.state.clone();
@@ -1210,6 +1365,8 @@ impl MainWindow {
             &self.mlt_tree_store,
             &self.window,
             &self.state,
+            &self.layer_windows,
+            &self.layer_host,
             &self.loading_spinner,
             &add_button,
         );
