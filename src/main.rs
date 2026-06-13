@@ -1,3 +1,4 @@
+mod canvas;
 mod layer_window;
 mod main_window;
 mod project_file;
