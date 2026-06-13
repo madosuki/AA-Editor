@@ -11,72 +11,121 @@ pub struct LayerWindow {
     title: Rc<RefCell<std::string::String>>,
     x: Rc<Cell<i32>>,
     y: Rc<Cell<i32>>,
-    start_x_for_drag: Rc<Cell<f64>>,
-    start_y_for_drag: Rc<Cell<f64>>,
     scrolled_window: gtk::ScrolledWindow,
     frame: gtk::Box,
+    parent_fixed: gtk::Fixed,
+}
+
+struct ActiveDrag {
+    target: gtk::Widget,
+    start_x: f64,
+    start_y: f64,
 }
 
 impl LayerWindow {
-    pub fn new() -> Self {
+    pub fn new(parent_fixed: &gtk::Fixed) -> Self {
+        Self::install_fixed_drag(parent_fixed);
+
         Self {
             title: Rc::new(RefCell::new("Layer 1".to_owned())),
-            x: Rc::new(Cell::new(48)),
-            y: Rc::new(Cell::new(48)),
-            start_x_for_drag: Rc::new(Cell::new(48.0)),
-            start_y_for_drag: Rc::new(Cell::new(48.0)),
+            x: Rc::new(Cell::new(0)),
+            y: Rc::new(Cell::new(0)),
             scrolled_window: gtk::ScrolledWindow::new(),
             frame: gtk::Box::new(gtk::Orientation::Vertical, 0),
+            parent_fixed: parent_fixed.clone(),
         }
     }
 
-    fn set_draggable(&self, drag_handle: &impl IsA<gtk::Widget>) {
-        let drag = gtk4::GestureDrag::new();
+    fn install_fixed_drag(parent_fixed: &gtk::Fixed) {
+        const FIXED_DRAG_INSTALLED_KEY: &str = "aa-editor-layer-fixed-drag-installed";
+
+        // GTK object data is type-erased; the key is private to this module and only stores bool.
+        if unsafe { parent_fixed.data::<bool>(FIXED_DRAG_INSTALLED_KEY) }.is_some() {
+            return;
+        }
+        // GTK object data is type-erased; see the matching read above.
+        unsafe {
+            parent_fixed.set_data(FIXED_DRAG_INSTALLED_KEY, true);
+        }
+
+        let active_drag = Rc::new(RefCell::new(None::<ActiveDrag>));
+        let drag = gtk::GestureDrag::new();
+        drag.set_button(1);
+        drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+
         {
-            let x = self.x.clone();
-            let y = self.y.clone();
-            let start_x = self.start_x_for_drag.clone();
-            let start_y = self.start_y_for_drag.clone();
-            drag.connect_drag_begin(move |_, _, _| {
-                start_x.set(x.get() as f64);
-                start_y.set(y.get() as f64);
+            let parent_fixed = parent_fixed.clone();
+            let active_drag = active_drag.clone();
+            drag.connect_drag_begin(move |gesture, start_x, start_y| {
+                let Some(target) = Self::draggable_layer_at(&parent_fixed, start_x, start_y) else {
+                    active_drag.borrow_mut().take();
+                    gesture.set_state(gtk::EventSequenceState::Denied);
+                    return;
+                };
+
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                let (start_x, start_y) = parent_fixed.child_position(&target);
+                active_drag.borrow_mut().replace(ActiveDrag {
+                    target,
+                    start_x,
+                    start_y,
+                });
             });
         }
-        {
-            let frame_cloned = self.frame.clone();
-            let start_x = self.start_x_for_drag.clone();
-            let start_y = self.start_y_for_drag.clone();
 
+        {
+            let parent_fixed = parent_fixed.clone();
+            let active_drag = active_drag.clone();
             drag.connect_drag_update(move |_, offset_x, offset_y| {
-                let final_x = (start_x.get() + offset_x).max(0.0).round();
-                let final_y = (start_y.get() + offset_y).max(0.0).round();
-                
-                frame_cloned.set_margin_start(final_x as i32);
-                frame_cloned.set_margin_top(final_y as i32);
+                let active_drag = active_drag.borrow();
+                let Some(active_drag) = active_drag.as_ref() else {
+                    return;
+                };
+
+                parent_fixed.move_(
+                    &active_drag.target,
+                    (active_drag.start_x + offset_x).max(0.0),
+                    (active_drag.start_y + offset_y).max(0.0),
+                );
             });
         }
+
         {
-            let frame_cloned = self.frame.clone();
-
-            let x = self.x.clone();
-            let y = self.y.clone();
-            let start_x = self.start_x_for_drag.clone();
-            let start_y = self.start_y_for_drag.clone();
-
+            let parent_fixed = parent_fixed.clone();
+            let active_drag = active_drag.clone();
             drag.connect_drag_end(move |_, offset_x, offset_y| {
-                let tmp_x = start_x.get() as f64 + offset_x;
-                let tmp_y = start_y.get() as f64 + offset_y;
-                let final_x = tmp_x.max(0.0);
-                let final_y = tmp_y.max(0.0);
-                x.set(final_x.round() as i32);
-                y.set(final_y.round() as i32);
+                let Some(active) = active_drag.borrow_mut().take() else {
+                    return;
+                };
 
-                frame_cloned.set_margin_start(x.get());
-                frame_cloned.set_margin_top(y.get());
+                parent_fixed.move_(
+                    &active.target,
+                    (active.start_x + offset_x).max(0.0),
+                    (active.start_y + offset_y).max(0.0),
+                );
             });
         }
 
-        drag_handle.add_controller(drag);
+        parent_fixed.add_controller(drag);
+    }
+
+    fn draggable_layer_at(parent_fixed: &gtk::Fixed, x: f64, y: f64) -> Option<gtk::Widget> {
+        let fixed_widget: gtk::Widget = parent_fixed.clone().upcast();
+        let mut widget = parent_fixed.pick(x, y, gtk::PickFlags::DEFAULT)?;
+        let mut header_picked = false;
+
+        loop {
+            if widget.has_css_class("layer-header") {
+                header_picked = true;
+            }
+
+            let parent = widget.parent()?;
+            if parent == fixed_widget {
+                return (header_picked && widget.has_css_class("layer-panel")).then_some(widget);
+            }
+
+            widget = parent;
+        }
     }
 
     pub fn init(&self, window_title: std::string::String, width: i32, height: i32) {
@@ -120,16 +169,11 @@ impl LayerWindow {
         self.frame.append(&self.scrolled_window);
     }
 
-    pub fn attach_to(&self, layer_host: &gtk::Overlay) {
+    pub fn attach_to(&self) {
         self.frame.set_halign(gtk::Align::Start);
         self.frame.set_valign(gtk::Align::Start);
-        self.frame.set_margin_start(self.x.get());
-        self.frame.set_margin_top(self.y.get());
-        layer_host.add_overlay(&self.frame);
-
-        if let Some(header) = self.frame.first_child() {
-            self.set_draggable(&header);
-        }
+        self.parent_fixed
+            .put(&self.frame, self.x.get() as f64, self.y.get() as f64);
 
         self.frame.show();
     }
@@ -139,8 +183,8 @@ impl LayerWindow {
             return;
         };
 
-        if let Ok(layer_host) = parent.downcast::<gtk::Overlay>() {
-            layer_host.remove_overlay(&self.frame);
+        if let Ok(parent_fixed) = parent.downcast::<gtk::Fixed>() {
+            parent_fixed.remove(&self.frame);
         }
     }
 

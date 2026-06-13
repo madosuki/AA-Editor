@@ -49,7 +49,7 @@ struct MainWindow {
     mlt_tree_view: gtk::TreeView,
     mlt_viewer_list: gtk::ListBox,
     layer_windows: Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
-    layer_host: gtk::Overlay,
+    editor_view_container: gtk::Fixed,
     overlay: gtk::Overlay,
     loading_spinner: gtk::Spinner,
     state: Rc<RefCell<ProjectState>>,
@@ -77,7 +77,7 @@ impl MainWindow {
             mlt_tree_view: gtk::TreeView::new(),
             mlt_viewer_list: gtk::ListBox::new(),
             layer_windows: Rc::new(RefCell::new(HashMap::new())),
-            layer_host: gtk::Overlay::new(),
+            editor_view_container: gtk::Fixed::new(),
             overlay: gtk::Overlay::new(),
             loading_spinner: gtk::Spinner::new(),
             state: Rc::new(RefCell::new(ProjectState::default())),
@@ -206,7 +206,7 @@ impl MainWindow {
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
         layer_windows: Option<&Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>>,
-        layer_host: Option<&gtk::Overlay>,
+        editor_view_container: Option<&gtk::Fixed>,
         read_only: bool,
     ) -> gtk::ListBoxRow {
         let editor_row = gtk::ListBoxRow::new();
@@ -218,6 +218,7 @@ impl MainWindow {
         editor_row.set_activatable(false);
         editor_row.set_selectable(false);
 
+        // whole pane
         let row_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
         row_paned.set_hexpand(true);
         row_paned.set_vexpand(false);
@@ -226,6 +227,7 @@ impl MainWindow {
         left_pane.set_size_request(120, -1);
         left_pane.set_valign(gtk::Align::Start);
 
+        // for some info at left pane
         let item_info = gtk::Label::new(None);
         item_info.add_css_class("item-info");
         item_info.set_xalign(0.0);
@@ -261,13 +263,23 @@ impl MainWindow {
 
         left_pane.append(&item_info);
 
-        if let (Some(layer_windows), Some(layer_host)) = (layer_windows, layer_host) {
+        let editor_overlay = gtk::Overlay::new();
+        editor_overlay.set_hexpand(true);
+        editor_overlay.set_vexpand(true);
+
+        if let (Some(layer_windows), Some(editor_view_container)) =
+            (layer_windows, editor_view_container)
+        {
             let add_layer_button = gtk::Button::with_label("Add Layer");
             add_layer_button.set_valign(gtk::Align::Start);
 
+            editor_view_container.put(&text_view, 0.0, 0.0);
+            editor_overlay.set_child(Some(editor_view_container));
+
             let item_info_for_layer = item_info.clone();
             let layer_windows = layer_windows.clone();
-            let layer_host = layer_host.clone();
+            let editor_view_container = editor_view_container.clone();
+            // let layer_host = layer_host.clone();
             add_layer_button.connect_clicked(move |_| {
                 let item_number = Self::item_number_from_info_label(&item_info_for_layer) as u64;
                 if item_number == 0 {
@@ -280,10 +292,10 @@ impl MainWindow {
                     .map(|layers| layers.len() + 1)
                     .unwrap_or(1);
 
-                let layer_window = LayerWindow::new();
+                let layer_window = LayerWindow::new(&editor_view_container);
                 let title = format!("Item {item_number} Layer {layer_number}");
                 layer_window.init(title, 640, 480);
-                layer_window.attach_to(&layer_host);
+                layer_window.attach_to();
 
                 layer_windows
                     .borrow_mut()
@@ -294,11 +306,6 @@ impl MainWindow {
 
             left_pane.append(&add_layer_button);
         }
-
-        let editor_overlay = gtk::Overlay::new();
-        editor_overlay.set_hexpand(true);
-        editor_overlay.set_vexpand(true);
-        editor_overlay.set_child(Some(&text_view));
 
         let editor_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
         editor_paned.set_hexpand(true);
@@ -355,14 +362,14 @@ impl MainWindow {
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
         layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
-        layer_host: &gtk::Overlay,
+        editor_view_container: &gtk::Fixed,
     ) {
         editor_list.append(&Self::create_editor_row(
             text,
             window,
             state,
             Some(layer_windows),
-            Some(layer_host),
+            Some(editor_view_container),
             false,
         ));
         Self::renumber_editors(editor_list);
@@ -468,7 +475,7 @@ impl MainWindow {
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
         layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
-        layer_host: &gtk::Overlay,
+        editor_view_container: &gtk::Fixed,
         path: PathBuf,
         project_file: ProjectFile,
     ) {
@@ -477,10 +484,24 @@ impl MainWindow {
         let texts = project_file.to_texts();
 
         if texts.is_empty() {
-            Self::append_editor(editor_list, "", window, state, layer_windows, layer_host);
+            Self::append_editor(
+                editor_list,
+                "",
+                window,
+                state,
+                layer_windows,
+                editor_view_container,
+            );
         } else {
             for text in texts {
-                Self::append_editor(editor_list, &text, window, state, layer_windows, layer_host);
+                Self::append_editor(
+                    editor_list,
+                    &text,
+                    window,
+                    state,
+                    layer_windows,
+                    editor_view_container,
+                );
             }
         }
 
@@ -494,11 +515,18 @@ impl MainWindow {
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
         layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
-        layer_host: &gtk::Overlay,
+        editor_view_container: &gtk::Fixed,
         texts: Vec<String>,
     ) {
         for text in texts {
-            Self::append_editor(editor_list, &text, window, state, layer_windows, layer_host);
+            Self::append_editor(
+                editor_list,
+                &text,
+                window,
+                state,
+                layer_windows,
+                editor_view_container,
+            );
         }
         Self::mark_dirty(window, state);
     }
@@ -662,7 +690,7 @@ impl MainWindow {
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
         layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
-        layer_host: &gtk::Overlay,
+        editor_view_container: &gtk::Fixed,
         loading_controls: &LoadingControls,
         path: PathBuf,
     ) {
@@ -673,7 +701,7 @@ impl MainWindow {
         let window = window.clone();
         let state = state.clone();
         let layer_windows = layer_windows.clone();
-        let layer_host = layer_host.clone();
+        let editor_view_container = editor_view_container.clone();
         let loading_controls = loading_controls.clone();
         glib::spawn_future_local(async move {
             let (sender, receiver) = mpsc::channel();
@@ -693,7 +721,7 @@ impl MainWindow {
                         &window,
                         &state,
                         &layer_windows,
-                        &layer_host,
+                        &editor_view_container,
                         path.clone(),
                         project_file,
                     );
@@ -767,7 +795,7 @@ impl MainWindow {
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
         layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
-        layer_host: &gtk::Overlay,
+        editor_view_container: &gtk::Fixed,
         loading_controls: &LoadingControls,
     ) {
         let dialog = FileChooserNative::new(
@@ -783,7 +811,7 @@ impl MainWindow {
         let window = window.clone();
         let state = state.clone();
         let layer_windows = layer_windows.clone();
-        let layer_host = layer_host.clone();
+        let editor_view_container_cloned = editor_view_container.clone();
         let loading_controls = loading_controls.clone();
         dialog.run_async(move |dialog, response| {
             if response == ResponseType::Accept {
@@ -794,7 +822,7 @@ impl MainWindow {
                         &window,
                         &state,
                         &layer_windows,
-                        &layer_host,
+                        &editor_view_container_cloned,
                         &loading_controls,
                         path,
                     );
@@ -1053,7 +1081,7 @@ impl MainWindow {
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
         layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
-        layer_host: &gtk::Overlay,
+        editor_view_container: &gtk::Fixed,
         loading_controls: &LoadingControls,
         path: PathBuf,
     ) {
@@ -1063,7 +1091,7 @@ impl MainWindow {
         let window = window.clone();
         let state = state.clone();
         let layer_windows = layer_windows.clone();
-        let layer_host = layer_host.clone();
+        let editor_view_container_cloned = editor_view_container.clone();
         let loading_controls = loading_controls.clone();
         glib::spawn_future_local(async move {
             let (sender, receiver) = mpsc::channel();
@@ -1081,7 +1109,7 @@ impl MainWindow {
                         &window,
                         &state,
                         &layer_windows,
-                        &layer_host,
+                        &editor_view_container_cloned,
                         texts,
                     );
                     MainWindow::set_loading_state(&loading_controls, false);
@@ -1108,7 +1136,7 @@ impl MainWindow {
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
         layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
-        layer_host: &gtk::Overlay,
+        editor_view_container: &gtk::Fixed,
         loading_controls: &LoadingControls,
     ) {
         let dialog = FileChooserNative::new(
@@ -1123,7 +1151,7 @@ impl MainWindow {
         let window = window.clone();
         let state = state.clone();
         let layer_windows = layer_windows.clone();
-        let layer_host = layer_host.clone();
+        let editor_view_container_cloned = editor_view_container.clone();
         let loading_controls = loading_controls.clone();
         dialog.run_async(move |dialog, response| {
             if response == ResponseType::Accept {
@@ -1133,7 +1161,7 @@ impl MainWindow {
                         &window,
                         &state,
                         &layer_windows,
-                        &layer_host,
+                        &editor_view_container_cloned,
                         &loading_controls,
                         path,
                     );
@@ -1151,7 +1179,7 @@ impl MainWindow {
         window: &gtk::ApplicationWindow,
         state: &Rc<RefCell<ProjectState>>,
         layer_windows: &Rc<RefCell<HashMap<u64, Vec<LayerWindow>>>>,
-        layer_host: &gtk::Overlay,
+        editor_view_container: &gtk::Fixed,
         spinner: &gtk::Spinner,
         add_button: &gtk::Button,
     ) {
@@ -1184,7 +1212,7 @@ impl MainWindow {
         let window_clone = window.clone();
         let state_clone = state.clone();
         let layer_windows_clone = layer_windows.clone();
-        let layer_host_clone = layer_host.clone();
+        let editor_view_container_cloned = editor_view_container.clone();
         let loading_controls_clone = loading_controls.clone();
         open_action.connect_activate(move |_, _| {
             MainWindow::show_open_dialog(
@@ -1193,7 +1221,7 @@ impl MainWindow {
                 &window_clone,
                 &state_clone,
                 &layer_windows_clone,
-                &layer_host_clone,
+                &editor_view_container_cloned,
                 &loading_controls_clone,
             );
         });
@@ -1226,7 +1254,7 @@ impl MainWindow {
         let window_clone = window.clone();
         let state_clone = state.clone();
         let layer_windows_clone = layer_windows.clone();
-        let layer_host_clone = layer_host.clone();
+        let editor_view_container_cloned = editor_view_container.clone();
         let loading_controls_clone = loading_controls.clone();
         import_mlt_action.connect_activate(move |_, _| {
             MainWindow::show_import_mlt_dialog(
@@ -1234,7 +1262,7 @@ impl MainWindow {
                 &window_clone,
                 &state_clone,
                 &layer_windows_clone,
-                &layer_host_clone,
+                &editor_view_container_cloned,
                 &loading_controls_clone,
             );
         });
@@ -1262,16 +1290,24 @@ impl MainWindow {
         self.window.set_default_size(width, height);
         self.window.set_show_menubar(true);
 
+        // root box
         self.v_box.set_halign(gtk::Align::Fill);
         self.v_box.set_valign(gtk::Align::Fill);
         self.v_box.set_hexpand(true);
         self.v_box.set_vexpand(true);
 
+        // main view. main view have 3 pane
         let main_view_box = gtk::Box::new(gtk::Orientation::Vertical, 1);
         main_view_box.set_halign(gtk::Align::Fill);
         main_view_box.set_valign(gtk::Align::Fill);
         main_view_box.set_hexpand(true);
         main_view_box.set_vexpand(true);
+
+        // editor container
+        self.editor_view_container.set_halign(gtk::Align::Fill);
+        self.editor_view_container.set_valign(gtk::Align::Fill);
+        self.editor_view_container.set_hexpand(true);
+        self.editor_view_container.set_vexpand(true);
 
         self.install_text_style();
 
@@ -1285,10 +1321,11 @@ impl MainWindow {
             &self.window,
             &self.state,
             &self.layer_windows,
-            &self.layer_host,
+            &self.editor_view_container,
         );
         Self::mark_clean(&self.window, &self.state, None);
 
+        // add button on overlay
         let add_button = gtk::Button::with_label("Add");
         add_button.set_halign(gtk::Align::End);
         add_button.set_valign(gtk::Align::End);
@@ -1299,7 +1336,7 @@ impl MainWindow {
         let window = self.window.clone();
         let state = self.state.clone();
         let layer_windows = self.layer_windows.clone();
-        let layer_host = self.layer_host.clone();
+        let editor_view_container_cloned = self.editor_view_container.clone();
         add_button.connect_clicked(move |_| {
             MainWindow::append_editor(
                 &editor_list,
@@ -1307,7 +1344,7 @@ impl MainWindow {
                 &window,
                 &state,
                 &layer_windows,
-                &layer_host,
+                &editor_view_container_cloned,
             );
             MainWindow::mark_dirty(&window, &state);
         });
@@ -1326,12 +1363,6 @@ impl MainWindow {
         editor_overlay.set_child(Some(&self.view_window));
         editor_overlay.add_overlay(&add_button);
         main_view_box.append(&editor_overlay);
-
-        self.layer_host.set_halign(gtk::Align::Fill);
-        self.layer_host.set_valign(gtk::Align::Fill);
-        self.layer_host.set_hexpand(true);
-        self.layer_host.set_vexpand(true);
-        self.layer_host.set_child(Some(&main_view_box));
 
         let mlt_tree_scroll = gtk::ScrolledWindow::new();
         mlt_tree_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
@@ -1387,7 +1418,7 @@ impl MainWindow {
         self.loading_spinner.set_valign(gtk::Align::Center);
         Self::set_loading(&self.loading_spinner, false);
 
-        self.overlay.set_child(Some(&self.layer_host));
+        self.overlay.set_child(Some(&main_view_box));
         self.overlay.add_overlay(&self.loading_spinner);
         notebook.prepend_page(&self.overlay, Some(&gtk::Label::new(Some("Main View"))));
         notebook.set_current_page(Some(0));
@@ -1400,7 +1431,7 @@ impl MainWindow {
             &self.window,
             &self.state,
             &self.layer_windows,
-            &self.layer_host,
+            &self.editor_view_container,
             &self.loading_spinner,
             &add_button,
         );
