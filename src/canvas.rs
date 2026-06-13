@@ -11,11 +11,18 @@ pub struct Canvas {
 
 struct ActiveDrag {
     target: gtk::Widget,
-    start_x: f64,
-    start_y: f64,
+    action: DragAction,
+}
+
+enum DragAction {
+    Move { start_x: f64, start_y: f64 },
+    Resize { start_width: i32, start_height: i32 },
 }
 
 impl Canvas {
+    const MIN_LAYER_HEIGHT: i32 = 160;
+    const MIN_LAYER_WIDTH: i32 = 240;
+
     pub fn new() -> Self {
         let fixed = gtk::Fixed::new();
         fixed.set_halign(gtk::Align::Fill);
@@ -44,6 +51,13 @@ impl Canvas {
         self.fixed.move_(layer, x.max(0.0), y.max(0.0));
     }
 
+    pub fn resize_layer(&self, layer: &gtk::Widget, width: i32, height: i32) {
+        layer.set_size_request(
+            width.max(Self::MIN_LAYER_WIDTH),
+            height.max(Self::MIN_LAYER_HEIGHT),
+        );
+    }
+
     pub fn remove_layer(&self, layer: &gtk::Widget) {
         let Some(parent) = layer.parent() else {
             return;
@@ -64,18 +78,28 @@ impl Canvas {
             let canvas = self.clone();
             let active_drag = active_drag.clone();
             drag.connect_drag_begin(move |gesture, start_x, start_y| {
-                let Some(target) = canvas.draggable_layer_at(start_x, start_y) else {
+                let Some(interaction) = canvas.layer_interaction_at(start_x, start_y) else {
                     active_drag.borrow_mut().take();
                     gesture.set_state(gtk::EventSequenceState::Denied);
                     return;
                 };
 
                 gesture.set_state(gtk::EventSequenceState::Claimed);
-                let (start_x, start_y) = canvas.fixed.child_position(&target);
-                active_drag.borrow_mut().replace(ActiveDrag {
-                    target,
-                    start_x,
-                    start_y,
+                active_drag.borrow_mut().replace(match interaction {
+                    LayerInteraction::Move(target) => {
+                        let (start_x, start_y) = canvas.fixed.child_position(&target);
+                        ActiveDrag {
+                            target,
+                            action: DragAction::Move { start_x, start_y },
+                        }
+                    }
+                    LayerInteraction::Resize(target) => ActiveDrag {
+                        action: DragAction::Resize {
+                            start_width: target.width(),
+                            start_height: target.height(),
+                        },
+                        target,
+                    },
                 });
             });
         }
@@ -89,11 +113,7 @@ impl Canvas {
                     return;
                 };
 
-                canvas.move_layer(
-                    &active_drag.target,
-                    active_drag.start_x + offset_x,
-                    active_drag.start_y + offset_y,
-                );
+                canvas.update_active_drag(active_drag, offset_x, offset_y);
             });
         }
 
@@ -105,33 +125,72 @@ impl Canvas {
                     return;
                 };
 
-                canvas.move_layer(
-                    &active.target,
-                    active.start_x + offset_x,
-                    active.start_y + offset_y,
-                );
+                canvas.update_active_drag(&active, offset_x, offset_y);
             });
         }
 
         self.fixed.add_controller(drag);
     }
 
-    fn draggable_layer_at(&self, x: f64, y: f64) -> Option<gtk::Widget> {
+    fn update_active_drag(&self, active_drag: &ActiveDrag, offset_x: f64, offset_y: f64) {
+        match active_drag.action {
+            DragAction::Move { start_x, start_y } => {
+                self.move_layer(&active_drag.target, start_x + offset_x, start_y + offset_y)
+            }
+            DragAction::Resize {
+                start_width,
+                start_height,
+            } => self.resize_layer(
+                &active_drag.target,
+                start_width + offset_x.round() as i32,
+                start_height + offset_y.round() as i32,
+            ),
+        }
+    }
+
+    fn layer_interaction_at(&self, x: f64, y: f64) -> Option<LayerInteraction> {
         let fixed_widget: gtk::Widget = self.fixed.clone().upcast();
         let mut widget = self.fixed.pick(x, y, gtk::PickFlags::DEFAULT)?;
         let mut header_picked = false;
+        let mut resize_picked = false;
+        let mut close_picked = false;
 
         loop {
             if widget.has_css_class("layer-header") {
                 header_picked = true;
             }
+            if widget.has_css_class("layer-resize-handle") {
+                resize_picked = true;
+            }
+            if widget.has_css_class("layer-close-button") {
+                close_picked = true;
+            }
 
             let parent = widget.parent()?;
             if parent == fixed_widget {
-                return (header_picked && widget.has_css_class("layer-panel")).then_some(widget);
+                if !widget.has_css_class("layer-panel") {
+                    return None;
+                }
+
+                if close_picked {
+                    return None;
+                }
+                if resize_picked {
+                    return Some(LayerInteraction::Resize(widget));
+                }
+                if header_picked {
+                    return Some(LayerInteraction::Move(widget));
+                }
+
+                return None;
             }
 
             widget = parent;
         }
     }
+}
+
+enum LayerInteraction {
+    Move(gtk::Widget),
+    Resize(gtk::Widget),
 }

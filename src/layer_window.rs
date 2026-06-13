@@ -30,7 +30,10 @@ impl LayerWindow {
         }
     }
 
-    pub fn init(&self, window_title: std::string::String, width: i32, height: i32) {
+    pub fn init<F>(&self, window_title: std::string::String, width: i32, height: i32, on_close: F)
+    where
+        F: Fn() + 'static,
+    {
         Self::install_style();
 
         self.frame.add_css_class("layer-panel");
@@ -45,7 +48,20 @@ impl LayerWindow {
         title.set_xalign(0.0);
         title.set_hexpand(true);
 
+        let close_button = gtk::Button::with_label("×");
+        close_button.add_css_class("layer-close-button");
+        close_button.set_focusable(false);
+        {
+            let canvas = self.canvas.clone();
+            let frame = self.frame.clone().upcast::<gtk::Widget>();
+            close_button.connect_clicked(move |_| {
+                canvas.remove_layer(&frame);
+                on_close();
+            });
+        }
+
         header.append(&title);
+        header.append(&close_button);
 
         let text_view = gtk::TextView::new();
         text_view.add_css_class("layer-text");
@@ -69,6 +85,7 @@ impl LayerWindow {
 
         self.frame.append(&header);
         self.frame.append(&self.scrolled_window);
+        self.frame.append(&self.resize_handle());
     }
 
     pub fn attach_to(&self) {
@@ -86,6 +103,10 @@ impl LayerWindow {
     pub fn remove_from_parent(&self) {
         self.canvas
             .remove_layer(&self.frame.clone().upcast::<gtk::Widget>());
+    }
+
+    pub fn widget(&self) -> gtk::Widget {
+        self.frame.clone().upcast()
     }
 
     fn install_style() {
@@ -107,10 +128,26 @@ impl LayerWindow {
                 font-weight: bold;
             }
 
+            .layer-close-button {
+                padding: 0 6px;
+                min-width: 24px;
+                min-height: 20px;
+            }
+
             .layer-text {
                 font-family: Monapo, 'MS PGothic', sans-serif;
                 font-size: 16px;
                 line-height: 18px;
+            }
+
+            .layer-resize-row {
+                padding: 0 2px 2px 0;
+            }
+
+            .layer-resize-handle {
+                background: #9ca3af;
+                min-width: 14px;
+                min-height: 14px;
             }",
         );
 
@@ -119,5 +156,26 @@ impl LayerWindow {
             &provider,
             STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
+    }
+
+    fn resize_handle(&self) -> gtk::Box {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        row.add_css_class("layer-resize-row");
+        row.set_halign(gtk::Align::Fill);
+
+        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        spacer.set_hexpand(true);
+
+        let handle = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        handle.add_css_class("layer-resize-handle");
+        handle.set_cursor_from_name(Some("nwse-resize"));
+
+        row.append(&spacer);
+        row.append(&handle);
+        row
+    }
+
+    pub fn has_widget(&self, widget: &gtk::Widget) -> bool {
+        self.frame.clone().upcast::<gtk::Widget>() == *widget
     }
 }

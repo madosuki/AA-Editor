@@ -292,8 +292,22 @@ impl MainWindow {
                     .unwrap_or(1);
 
                 let layer_window = LayerWindow::new(&canvas);
+                let layer_widget = layer_window.widget();
                 let title = format!("Item {item_number} Layer {layer_number}");
-                layer_window.init(title, 640, 480);
+                {
+                    let layer_windows = layer_windows.clone();
+                    layer_window.init(title, 640, 480, move || {
+                        let mut layer_windows = layer_windows.borrow_mut();
+                        let Some(layers) = layer_windows.get_mut(&item_number) else {
+                            return;
+                        };
+
+                        layers.retain(|layer| !layer.has_widget(&layer_widget));
+                        if layers.is_empty() {
+                            layer_windows.remove(&item_number);
+                        }
+                    });
+                }
                 layer_window.attach_to();
 
                 layer_windows
