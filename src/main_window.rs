@@ -271,6 +271,8 @@ impl MainWindow {
         if let (Some(layer_windows), Some(canvas)) = (layer_windows, canvas) {
             let add_layer_button = gtk::Button::with_label("Add Layer");
             add_layer_button.set_valign(gtk::Align::Start);
+            let compose_layer_button = gtk::Button::with_label("Compose by Layer");
+            compose_layer_button.set_valign(gtk::Align::Start);
 
             canvas.put_base_text_view(&text_view);
             let canvas_widget = canvas.widget();
@@ -318,6 +320,7 @@ impl MainWindow {
             });
 
             left_pane.append(&add_layer_button);
+            left_pane.append(&compose_layer_button);
         }
 
         let editor_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
