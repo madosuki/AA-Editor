@@ -278,46 +278,63 @@ impl MainWindow {
             let canvas_widget = canvas.widget();
             editor_overlay.set_child(Some(&canvas_widget));
 
-            let item_info_for_layer = item_info.clone();
-            let layer_windows = layer_windows.clone();
-            let canvas = canvas.clone();
+            let item_info_for_layer_cloned = item_info.clone();
+            let layer_windows_cloned = layer_windows.clone();
+            let canvas_cloned = canvas.clone();
             add_layer_button.connect_clicked(move |_| {
-                let item_number = Self::item_number_from_info_label(&item_info_for_layer) as u64;
+                let item_number = Self::item_number_from_info_label(&item_info_for_layer_cloned) as u64;
                 if item_number == 0 {
                     return;
                 }
 
-                let layer_number = layer_windows
+                let layer_number = layer_windows_cloned
                     .borrow()
                     .get(&item_number)
                     .map(|layers| layers.len() + 1)
                     .unwrap_or(1);
 
-                let layer_window = LayerWindow::new(&canvas);
+                let layer_window = LayerWindow::new(&canvas_cloned);
                 let layer_widget = layer_window.widget();
                 let title = format!("Item {item_number} Layer {layer_number}");
                 {
-                    let layer_windows = layer_windows.clone();
+                    let layer_windows_cloned_cloned = layer_windows_cloned.clone();
                     layer_window.init(title, 640, 480, move || {
-                        let mut layer_windows = layer_windows.borrow_mut();
-                        let Some(layers) = layer_windows.get_mut(&item_number) else {
+                        let mut layer_windows_muted = layer_windows_cloned_cloned.borrow_mut();
+                        let Some(layers) = layer_windows_muted.get_mut(&item_number) else {
                             return;
                         };
 
                         layers.retain(|layer| !layer.has_widget(&layer_widget));
                         if layers.is_empty() {
-                            layer_windows.remove(&item_number);
+                            layer_windows_muted.remove(&item_number);
                         }
                     });
                 }
                 layer_window.attach_to();
 
-                layer_windows
+                layer_windows_cloned
                     .borrow_mut()
                     .entry(item_number)
                     .or_default()
                     .push(layer_window);
             });
+
+            compose_layer_button.connect_clicked(glib::clone!(#[strong] item_info, #[weak] layer_windows, #[strong] text_view, #[strong] canvas, move |_| {
+                let (base_text_view_x, base_text_view_y) = canvas.get_base_text_view_position(&text_view);
+                println!("base text view x: {base_text_view_x}, baset text view y: {base_text_view_y}");
+
+                let item_number = Self::item_number_from_info_label(&item_info) as u64;
+                if item_number == 0 {
+                    return;
+                }
+
+                if let Some(layers) = layer_windows.borrow().get(&item_number) {
+                    layers.iter().for_each(|layer| {
+                        let (x, y) = canvas.get_layer_position(&layer.widget());
+                        println!("layer x: {x}, layer y: {y}");
+                    });
+                };
+            }));
 
             left_pane.append(&add_layer_button);
             left_pane.append(&compose_layer_button);

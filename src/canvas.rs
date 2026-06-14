@@ -47,6 +47,14 @@ impl Canvas {
         self.fixed.put(layer, x, y);
     }
 
+    pub fn get_base_text_view_position(&self, text_view: &gtk::TextView) -> (f64, f64) {
+        self.fixed.child_position(text_view)
+    }
+
+    pub fn get_layer_position(&self, layer: &gtk::Widget) -> (f64, f64) {
+        self.fixed.child_position(layer)
+    }
+
     pub fn move_layer(&self, layer: &gtk::Widget, x: f64, y: f64) {
         self.fixed.move_(layer, x.max(0.0), y.max(0.0));
     }
