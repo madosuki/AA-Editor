@@ -26,6 +26,73 @@ use crate::project_file::ProjectFile;
 
 const APP_TITLE: &str = "AA Editor";
 
+fn calc_width_whole_text_view(text: &str) -> u64 {
+    let mut width = 0;
+    let mut line_count = 0;
+    let mut count_char = 0;
+    let chars = text.chars();
+    for c in chars {
+        if c == '\n' {
+            line_count = line_count + 1;
+            if width < count_char {
+                width = count_char;
+            }
+        } else {
+            count_char = count_char + 1;
+        }
+    }
+    
+    if line_count == 0 {
+        width = count_char;
+    }
+    
+    width
+}
+
+// check have enough white space.
+fn check_whether_fill_layer_text(from_width_list: Vec<usize>, target: &str, start_insert_pos: usize) {
+    let mut chars = target.chars();
+    let mut row_count = 0;
+    let mut column_count = 0;
+    let mut ascii_white_space_count = 0;
+    let mut wide_width_white_space_count = 0;
+    let mut check_rows: Vec<bool> = vec!();
+    let mut not_enough_spaces_of_horizonal: Vec<usize> = vec!();
+
+    let mut pos = start_insert_pos;
+    loop {
+        if let Some(c) = chars.nth(pos) {
+            if c == ' ' {
+                ascii_white_space_count = ascii_white_space_count + 1;
+            }
+            if c == '　' {
+                wide_width_white_space_count = wide_width_white_space_count + 1;
+            }
+
+            if c == '\n' {
+                if from_width_list[row_count] <= column_count {
+                    check_rows.push(true);
+                    not_enough_spaces_of_horizonal.push(0);
+                } else {
+                    check_rows.push(false);
+                    not_enough_spaces_of_horizonal.push(from_width_list[row_count] - column_count);
+                }
+
+                
+                row_count = row_count + 1;
+                ascii_white_space_count = 0;
+                wide_width_white_space_count = 0;
+                column_count = 0;
+            } else {
+                column_count = column_count + 1;
+            }
+
+            
+        }
+        pos = pos + 1;
+    }
+}
+
 #[derive(Debug, Default)]
 struct ProjectState {
     current_path: Option<PathBuf>,
@@ -319,9 +386,17 @@ impl MainWindow {
                     .push(layer_window);
             });
 
-            compose_layer_button.connect_clicked(glib::clone!(#[strong] item_info, #[weak] layer_windows, #[strong] text_view, #[strong] canvas, move |_| {
+            compose_layer_button.connect_clicked(glib::clone!(#[strong] item_info, #[weak] layer_windows, #[weak] text_view, #[strong] canvas, move |_| {
                 let (base_text_view_x, base_text_view_y) = canvas.get_base_text_view_position(&text_view);
                 println!("base text view x: {base_text_view_x}, baset text view y: {base_text_view_y}");
+
+                let buffer = text_view.buffer();
+                let (bound_start, bound_end) = buffer.bounds();
+                let text = buffer.text(&bound_start, &bound_end, false);
+                let s = text.to_string();
+                let width = calc_width_whole_text_view(&s);
+                println!("whole text view width: {width}");
+
 
                 let item_number = Self::item_number_from_info_label(&item_info) as u64;
                 if item_number == 0 {
