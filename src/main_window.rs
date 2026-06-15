@@ -26,25 +26,21 @@ use crate::project_file::ProjectFile;
 
 const APP_TITLE: &str = "AA Editor";
 
-fn calc_width_whole_text_view(text: &str) -> u64 {
+fn str_to_double_dimension(text: &str) -> Vec<Vec<char>> {
+    text.split("\n").map(|line| {
+        line.chars().collect()
+    }).collect()
+}
+
+fn calc_width_whole_text_view(target: &Vec<Vec<char>>) -> usize {
     let mut width = 0;
-    let mut line_count = 0;
-    let mut count_char = 0;
-    let chars = text.chars();
-    for c in chars {
-        if c == '\n' {
-            line_count = line_count + 1;
-            if width < count_char {
-                width = count_char;
-            }
-        } else {
-            count_char = count_char + 1;
+    for i in target {
+        let len = i.len();
+        if width < len {
+            width = len;
         }
     }
     
-    if line_count == 0 {
-        width = count_char;
-    }
     
     width
 }
@@ -394,7 +390,8 @@ impl MainWindow {
                 let (bound_start, bound_end) = buffer.bounds();
                 let text = buffer.text(&bound_start, &bound_end, false);
                 let s = text.to_string();
-                let width = calc_width_whole_text_view(&s);
+                let double_dimension = str_to_double_dimension(&s);
+                let width = calc_width_whole_text_view(&double_dimension);
                 println!("whole text view width: {width}");
 
 
