@@ -45,13 +45,9 @@ fn calc_max_width_whole_text_view(target: &Vec<Vec<char>>) -> usize {
 }
 
 fn get_width_list_from_chars_list(target: &Vec<Vec<char>>) -> Vec<usize> {
-    let mut result: Vec<usize> = vec!();
-
-    target.iter().for_each(|l| {
-        result.push(l.len());
-    });
-
-    result
+    target.iter().map(|v| {
+        v.len()
+    }).collect()
 }
 
 // check have enough white space.
