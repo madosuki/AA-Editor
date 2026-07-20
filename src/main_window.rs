@@ -32,7 +32,7 @@ fn str_to_double_dimension(text: &str) -> Vec<Vec<char>> {
     }).collect()
 }
 
-fn calc_width_whole_text_view(target: &Vec<Vec<char>>) -> usize {
+fn calc_max_width_whole_text_view(target: &Vec<Vec<char>>) -> usize {
     let mut width = 0;
     for i in target {
         let len = i.len();
@@ -41,8 +41,17 @@ fn calc_width_whole_text_view(target: &Vec<Vec<char>>) -> usize {
         }
     }
     
-    
     width
+}
+
+fn get_width_list_from_chars_list(target: &Vec<Vec<char>>) -> Vec<usize> {
+    let mut result: Vec<usize> = vec!();
+
+    target.iter().for_each(|l| {
+        result.push(l.len());
+    });
+
+    result
 }
 
 // check have enough white space.
@@ -391,7 +400,7 @@ impl MainWindow {
                 let text = buffer.text(&bound_start, &bound_end, false);
                 let s = text.to_string();
                 let double_dimension = str_to_double_dimension(&s);
-                let width = calc_width_whole_text_view(&double_dimension);
+                let width = calc_max_width_whole_text_view(&double_dimension);
                 println!("whole text view width: {width}");
 
 
