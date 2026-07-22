@@ -46,6 +46,7 @@
               stdenv.cc.cc.lib
               harfbuzz
               pango
+              graphene
             ];
 
             buildInputs = [
