@@ -32,7 +32,6 @@
               fontconfig
               freetype
               libarchive
-              mupdf
               gumbo
               jbig2dec
               libpng
@@ -47,7 +46,6 @@
               stdenv.cc.cc.lib
               harfbuzz
               pango
-              graphene
             ];
 
             buildInputs = [

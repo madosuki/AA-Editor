@@ -50,6 +50,17 @@ fn get_width_list_from_chars_list(target: &Vec<Vec<char>>) -> Vec<usize> {
     }).collect()
 }
 
+fn add_padding_white_space(canvas_whole_text: &Vec<Vec<char>>, insert_x_pos: i64, insert_y_pos: i64, target_width: i64, target_height: i64) {
+    let mut result = canvas_whole_text.clone();
+    let current_canvas_height = i64::try_from(canvas_whole_text.len()).unwrap();
+
+    if current_canvas_height == 0 {
+        return;
+    }
+
+    let add_line_num = (insert_y_pos + target_height) - current_canvas_height;
+}
+
 // check have enough white space.
 fn check_whether_fill_layer_text(from_width_list: Vec<usize>, target: &str, start_insert_pos: usize) {
     let mut chars = target.chars();
